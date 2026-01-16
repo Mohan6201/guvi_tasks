@@ -1,0 +1,50 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      docker: 20
+    commands:
+      - echo Installing Docker and AWS CLI...
+      - apt-get update
+      - apt-get install -y awscli
+      - echo Logging in to Amazon ECR...
+      - aws --version
+      - docker --version
+      
+  pre_build:
+    commands:
+      - echo Logging in to Amazon ECR...
+      - AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - AWS_REGION=us-east-1
+      - ECR_REGISTRY=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+      - ECR_REPOSITORY=brain-tasks-app
+      - IMAGE_TAG=${CODEBUILD_RESOLVED_SOURCE_VERSION}
+      - echo $ECR_REGISTRY
+      - echo $ECR_REPOSITORY
+      - echo $IMAGE_TAG
+      - aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
+      
+  build:
+    commands:
+      - echo Build started on `date`
+      - echo Building the Docker image...
+      - docker build -t ${ECR_REPOSITORY}:latest .
+      - docker tag ${ECR_REPOSITORY}:latest ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
+      - docker tag ${ECR_REPOSITORY}:latest ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+      
+  post_build:
+    commands:
+      - echo Build completed on `date`
+      - echo Pushing the Docker images...
+      - docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
+      - docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+      - echo Writing image definitions file...
+      - printf '[{"name":"brain-tasks-app","imageUri":"%s"}]' ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG} > imagedefinitions.json
+      - cat imagedefinitions.json
+
+artifacts:
+  files:
+    - imagedefinitions.json
+    - k8s/**/*
+    - appspec.yml
