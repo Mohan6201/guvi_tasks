@@ -1,0 +1,34 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: trend-app-service
+  labels:
+    app: trend-app
+spec:
+  selector:
+    app: trend-app
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: trend-app-ingress
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  rules:
+  - host: trend-app.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: trend-app-service
+            port:
+              number: 80
