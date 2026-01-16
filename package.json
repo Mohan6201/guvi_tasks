@@ -1,0 +1,17 @@
+{
+  "name": "devops-react-app",
+  "version": "1.0.0",
+  "description": "React application with DevOps deployment",
+  "main": "health-check.js",
+  "scripts": {
+    "start": "node health-check.js",
+    "build": "echo 'Build already exists in build/'",
+    "test": "echo 'No tests specified'"
+  },
+  "keywords": ["react", "devops", "docker", "monitoring"],
+  "author": "",
+  "license": "ISC",
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

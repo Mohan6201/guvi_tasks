@@ -4,7 +4,7 @@ FROM nginx:alpine
 # Remove the default nginx configuration
 RUN rm /etc/nginx/conf.d/default.conf
 
-# Copy custom nginx configuration
+# Copy custom nginx configuration with health check
 COPY nginx.conf /etc/nginx/conf.d/
 
 # Copy the build folder to nginx's html directory
