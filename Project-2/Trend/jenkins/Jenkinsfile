@@ -1,81 +1,73 @@
 pipeline {
     agent any
-    
+
     environment {
-        DOCKER_IMAGE = 'yourdockerhub/trend-app'
-        DOCKER_TAG = 'latest'
-        KUBECONFIG = credentials('kubeconfig')
-        DOCKERHUB_CREDENTIALS = credentials('dockerhub-credentials')
+        DOCKERHUB_CREDENTIALS = credentials('dockerhub-creds')
+        IMAGE_NAME             = "${DOCKERHUB_CREDENTIALS_USR}/trend-app"
+        IMAGE_TAG              = "${env.BUILD_NUMBER}"
+        EKS_CLUSTER            = "${env.EKS_CLUSTER_NAME}"
+        AWS_REGION             = "${env.AWS_DEFAULT_REGION}"
     }
-    
+
     stages {
         stage('Checkout') {
             steps {
-                git branch: 'main', url: 'https://github.com/yourusername/trend.git'
+                checkout scm
             }
         }
-        
+
         stage('Build Docker Image') {
             steps {
-                script {
-                    docker.build("${DOCKER_IMAGE}:${DOCKER_TAG}")
-                }
+                sh '''
+                    docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+                    docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
+                '''
             }
         }
-        
+
         stage('Test Docker Image') {
             steps {
-                script {
-                    // Test if the container starts successfully
-                    sh '''
-                        docker run -d --name test-container -p 8080:80 ${DOCKER_IMAGE}:${DOCKER_TAG}
-                        sleep 10
-                        curl -f http://localhost:8080 || exit 1
-                        docker stop test-container
-                        docker rm test-container
-                    '''
-                }
+                sh '''
+                    docker run -d --name trend-test -p 8081:80 ${IMAGE_NAME}:${IMAGE_TAG}
+                    sleep 10
+                    curl -f http://localhost:8081 || (docker logs trend-test && exit 1)
+                    docker stop trend-test
+                    docker rm trend-test
+                '''
             }
         }
-        
+
         stage('Push to DockerHub') {
             steps {
-                script {
-                    docker.withRegistry('https://index.docker.io/v1/', 'dockerhub-credentials') {
-                        docker.image("${DOCKER_IMAGE}:${DOCKER_TAG}").push()
-                    }
-                }
+                sh '''
+                    echo "$DOCKERHUB_CREDENTIALS_PSW" | docker login -u "$DOCKERHUB_CREDENTIALS_USR" --password-stdin
+                    docker push ${IMAGE_NAME}:${IMAGE_TAG}
+                    docker push ${IMAGE_NAME}:latest
+                '''
             }
         }
-        
-        stage('Deploy to Kubernetes') {
+
+        stage('Deploy to EKS') {
             steps {
-                script {
-                    withKubeConfig([credentialsId: 'kubeconfig']) {
-                        sh '''
-                            kubectl apply -f k8s/deployment.yaml
-                            kubectl apply -f k8s/service.yaml
-                            kubectl apply -f k8s/loadbalancer.yaml
-                            kubectl rollout status deployment/trend-app
-                        '''
-                    }
-                }
+                sh '''
+                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER}
+                    kubectl apply -f k8s/
+                    kubectl set image deployment/trend-app trend-app=${IMAGE_NAME}:${IMAGE_TAG}
+                    kubectl rollout status deployment/trend-app --timeout=120s
+                '''
             }
         }
     }
-    
+
     post {
+        always {
+            sh 'docker logout || true'
+        }
         success {
-            echo 'Pipeline executed successfully!'
-            mail to: 'your-email@example.com',
-                 subject: "✅ Trend App Deployment Success",
-                 body: "The Trend application has been successfully deployed to Kubernetes."
+            echo "Build #${env.BUILD_NUMBER} succeeded — deployed ${env.IMAGE_NAME}:${env.IMAGE_TAG} to EKS"
         }
         failure {
-            echo 'Pipeline failed!'
-            mail to: 'your-email@example.com',
-                 subject: "❌ Trend App Deployment Failed",
-                 body: "The Trend application deployment failed. Please check the Jenkins logs."
+            echo "Build #${env.BUILD_NUMBER} failed — check console output"
         }
     }
 }
