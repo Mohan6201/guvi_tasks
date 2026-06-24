@@ -1,176 +1,289 @@
-# Trend React Application - Production Deployment
+# TrendStore — DevOps Deployment
 
-This repository contains a complete CI/CD pipeline setup for deploying a React application to production using Docker, Kubernetes, Jenkins, and AWS EKS.
+## Task Description
 
-## 🏗️ Architecture Overview
+Dockerize and deploy a React application to **AWS EKS**, provision infrastructure with **Terraform**, automate builds with **Jenkins CI/CD** (GitHub Webhook triggered), push images to **DockerHub**, and monitor the cluster with **Prometheus + Grafana**.
+
+---
+
+## Tech Stack
+
+- **Docker** — Containerize the React app (nginx:alpine, port 80)
+- **DockerHub** — Store and version Docker images
+- **Terraform** — Provision VPC, EKS cluster, and Jenkins EC2
+- **AWS EKS** — Managed Kubernetes cluster to run the app
+- **Jenkins** — CI/CD pipeline with GitHub Webhook auto-trigger
+- **Prometheus + Grafana** — Cluster monitoring and dashboards deployed on EKS
+
+---
+
+## Project Structure
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   GitHub Repo   │───▶│     Jenkins     │───▶│    DockerHub    │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                                                        │
-                                                        ▼
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Monitoring    │◀───│   AWS EKS       │◀───│  Docker Image   │
-│ (Prometheus)    │    │   Kubernetes    │    │                 │
-│   (Grafana)     │    │     Cluster     │    └─────────────────┘
-└─────────────────┘    └─────────────────┘
+Trend/
+├── Dockerfile                  # nginx:alpine serving React dist/ on port 80
+├── nginx.conf                  # Custom nginx config
+├── terraform/
+│   ├── main.tf                 # VPC, subnets, EKS cluster, Jenkins EC2
+│   ├── variables.tf            # All input variables (no hardcoded values)
+│   └── outputs.tf              # Jenkins URL, EKS name, kubeconfig command
+├── scripts/
+│   └── setup_jenkins.sh        # Installs Docker, Jenkins, kubectl, AWS CLI on EC2
+├── jenkins/
+│   ├── Jenkinsfile             # Declarative pipeline — build, test, push, deploy
+│   └── setup.sh                # Jenkins plugin installation guide
+├── k8s/
+│   ├── deployment.yaml         # Trend app Deployment (3 replicas)
+│   ├── service.yaml            # ClusterIP service + Ingress
+│   └── loadbalancer.yaml       # LoadBalancer service for public access
+├── monitoring/
+│   ├── prometheus.yaml         # Prometheus Deployment + Service in monitoring namespace
+│   ├── grafana.yaml            # Grafana Deployment + Secret + Service
+│   └── setup.sh                # Deploys monitoring stack to EKS
+├── .env                        # Your credentials — never commit this
+├── .env.example                # Safe template to commit
+├── .dockerignore
+├── .gitignore
+└── README.md
 ```
 
-## 📋 Prerequisites
+---
 
-- **AWS CLI** configured with appropriate permissions
-- **Docker Desktop** installed and running
-- **kubectl** configured for EKS
-- **Terraform** installed
-- **Node.js** and **npm** (for local development)
-- **Git** installed
+## Architecture
 
-## 🚀 Quick Start
+```
+GitHub push
+    │
+    ▼ webhook
+Jenkins (EC2 t2.medium)
+    │
+    ├── docker build → DockerHub (<username>/trend-app)
+    │
+    └── kubectl apply → AWS EKS Cluster
+                            │
+                            ├── trend-app pods (3 replicas)
+                            │       └── LoadBalancer → public internet
+                            │
+                            └── monitoring namespace
+                                    ├── Prometheus :9090
+                                    └── Grafana    :3000
+```
 
-### 1. Clone and Setup Local Environment
+---
+
+## Environment Variables
+
+All credentials and config are driven through environment variables — **nothing is hardcoded**.
+
+| Variable | Where Used | Description |
+|----------|-----------|-------------|
+| `AWS_ACCESS_KEY_ID` | Terraform, AWS CLI | AWS Access Key |
+| `AWS_SECRET_ACCESS_KEY` | Terraform, AWS CLI | AWS Secret Key |
+| `TF_VAR_aws_region` | Terraform | AWS region (e.g. `us-east-1`) |
+| `TF_VAR_environment` | Terraform | Environment tag (e.g. `production`) |
+| `TF_VAR_cluster_name` | Terraform | EKS cluster name |
+| `TF_VAR_node_instance_type` | Terraform | EKS worker node type (e.g. `t3.medium`) |
+| `TF_VAR_jenkins_instance_type` | Terraform | Jenkins EC2 type (e.g. `t2.medium`) |
+| `TF_VAR_key_name` | Terraform | EC2 key pair name for SSH |
+| `DOCKERHUB_USERNAME` | Jenkins global env | DockerHub username |
+| `DOCKERHUB_PASSWORD` | Jenkins credentials | DockerHub password/token |
+| `EKS_CLUSTER_NAME` | Jenkins global env | EKS cluster to deploy to |
+| `AWS_DEFAULT_REGION` | Jenkins global env | AWS region for kubectl config |
+
+---
+
+## Prerequisites
+
+1. **AWS Account** with EC2, EKS, IAM, and VPC permissions
+2. **Terraform** >= 1.3.0
+3. **AWS CLI** installed locally
+4. **EC2 Key Pair** in your target region
+5. **DockerHub account** — create a public repo `<username>/trend-app`
+
+---
+
+## Step-by-Step Setup
+
+### Step 1 — Set Up `.env`
 
 ```bash
-git clone https://github.com/yourusername/trend.git
-cd trend
+cp .env.example .env
 ```
 
-### 2. Run Application Locally
+Fill in your actual values in `.env`. Never commit this file.
 
+---
+
+### Step 2 — Load Environment Variables
+
+**Linux / macOS:**
 ```bash
-# Install http-server globally
-npm install -g http-server
-
-# Run the application on port 3000
-cd dist
-http-server -p 3000 -c-1
+export $(cat .env | grep -v '#' | xargs)
 ```
 
-Access the application at: `http://localhost:3000`
-
-### 3. Docker Setup
-
-#### Build Docker Image
-```bash
-# Make sure Docker Desktop is running
-docker build -t trend-app:latest .
+**Windows (PowerShell):**
+```powershell
+Get-Content .env | Where-Object { $_ -notmatch '^#' -and $_ -ne '' } | ForEach-Object {
+    $key, $value = $_ -split '=', 2
+    [System.Environment]::SetEnvironmentVariable($key, $value, 'Process')
+}
 ```
 
-#### Test Docker Container
-```bash
-docker run -d -p 8080:80 --name trend-test trend-app:latest
-curl http://localhost:8080
-docker stop trend-test
-docker rm trend-test
-```
+---
 
-#### Push to DockerHub
-```bash
-# Login to DockerHub
-docker login
-
-# Tag and push
-docker tag trend-app:latest yourdockerhub/trend-app:latest
-docker push yourdockerhub/trend-app:latest
-```
-
-### 4. Infrastructure Setup with Terraform
+### Step 3 — Provision Infrastructure with Terraform
 
 ```bash
 cd terraform
-
-# Initialize Terraform
 terraform init
-
-# Plan the deployment
 terraform plan
-
-# Apply the changes
 terraform apply
-
-# Get outputs
-terraform output
 ```
 
-This will create:
-- VPC with public, private, and EKS subnets
-- EKS Kubernetes cluster (1.29)
-- EC2 instance with Jenkins pre-installed
-- IAM roles and policies
+This creates:
+- VPC with public and private subnets across 2 AZs
+- EKS cluster (`trend-eks-cluster`) with 2 × t3.medium worker nodes
+- EC2 instance for Jenkins with Docker, Java 17, Jenkins, kubectl, and AWS CLI pre-installed
+- IAM roles for EKS cluster and nodes
 - Security groups
 
-### 5. Kubernetes Deployment
+Note the outputs:
+```
+jenkins_url      = "http://x.x.x.x:8080"
+ssh_command      = "ssh -i ~/.ssh/my-key-pair.pem ubuntu@x.x.x.x"
+kubeconfig_command = "aws eks update-kubeconfig --region us-east-1 --name trend-eks-cluster"
+```
 
-#### Configure kubectl for EKS
+---
+
+### Step 4 — Configure kubectl for EKS
+
+Run the kubeconfig command from Terraform outputs:
 ```bash
 aws eks update-kubeconfig --region us-east-1 --name trend-eks-cluster
+kubectl get nodes
+# Expected: 2 nodes in Ready state
 ```
 
-#### Deploy Application
-```bash
-# Update the image in k8s/deployment.yaml with your DockerHub image
-kubectl apply -f k8s/deployment.yaml
-kubectl apply -f k8s/service.yaml
-kubectl apply -f k8s/loadbalancer.yaml
+---
 
-# Check deployment status
+### Step 5 — Test Docker Build Locally
+
+```bash
+docker build -t trend-app:test .
+docker run -p 8080:80 trend-app:test
+curl http://localhost:8080
+```
+
+---
+
+### Step 6 — Push Initial Image to DockerHub
+
+```bash
+docker tag trend-app:test $DOCKERHUB_USERNAME/trend-app:latest
+echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+docker push $DOCKERHUB_USERNAME/trend-app:latest
+```
+
+---
+
+### Step 7 — Deploy App to EKS Manually (First Time)
+
+```bash
+kubectl apply -f k8s/
 kubectl get pods
-kubectl get services
-kubectl get deployment
+kubectl get svc trend-app-loadbalancer
+# Wait for EXTERNAL-IP to be assigned (~2 minutes)
 ```
 
-### 6. Jenkins Setup
+Access the app at `http://<EXTERNAL-IP>`.
 
-#### Access Jenkins
-Get the Jenkins server IP from Terraform outputs:
+---
+
+### Step 8 — Unlock Jenkins
+
+Wait **3-5 minutes** after Terraform apply, then:
+
 ```bash
-terraform output jenkins_public_ip
+ssh -i ~/.ssh/<key>.pem ubuntu@<jenkins_ip>
+./get_jenkins_password.sh
 ```
 
-Access Jenkins at: `http://<jenkins-ip>:8080`
+Open `http://<jenkins_ip>:8080`, paste the password, install suggested plugins, and create admin user.
 
-#### Initial Jenkins Setup
-1. Get initial admin password:
-   ```bash
-   ssh -i your-key.pem ec2-user@<jenkins-ip>
-   sudo cat /var/lib/jenkins/secrets/initialAdminPassword
-   ```
+---
 
-2. Install required plugins via script:
-   ```bash
-   cd jenkins
-   chmod +x setup.sh
-   ./setup.sh
-   ```
+### Step 9 — Install Additional Jenkins Plugins
 
-#### Configure Jenkins Credentials
-1. **DockerHub Credentials**:
-   - Go to Manage Jenkins → Manage Credentials → Global → Add Credentials
-   - Kind: Username with password
-   - Username: Your DockerHub username
-   - Password: Your DockerHub password
-   - ID: `dockerhub-credentials`
+Go to **Manage Jenkins > Plugins > Available plugins**:
 
-2. **Kubernetes Config**:
-   - Get kubeconfig file: `aws eks update-kubeconfig --region us-east-1 --name trend-eks-cluster`
-   - Copy `~/.kube/config` file
-   - Add as Secret file credential with ID: `kubeconfig`
+| Plugin | Purpose |
+|--------|---------|
+| **Docker Pipeline** | Docker commands in pipeline |
+| **GitHub** | GitHub webhook integration |
+| **Pipeline** | Declarative Jenkinsfile |
+| **AWS Steps** | AWS CLI in pipeline |
 
-#### Create Jenkins Pipeline
-1. Create new pipeline project
-2. Select "Pipeline script from SCM"
-3. Repository URL: `https://github.com/yourusername/trend.git`
-4. Script path: `jenkins/Jenkinsfile`
+Restart Jenkins after installation.
 
-### 7. GitHub Webhook Setup
+---
 
-1. Go to your GitHub repository
-2. Settings → Webhooks → Add webhook
-3. Payload URL: `http://<jenkins-ip>:8080/github-webhook/`
-4. Content type: `application/json`
-5. Events: Just the `push` event
+### Step 10 — Configure Jenkins Credentials and Global Env Vars
 
-### 8. Monitoring Setup
+**Add DockerHub credential:**
+1. **Manage Jenkins > Credentials > Global > Add Credentials**
+   - Kind: **Username with password**
+   - Username: your DockerHub username
+   - Password: your DockerHub password/token
+   - ID: `dockerhub-creds` ← must match Jenkinsfile exactly
+
+**Add Global Environment Variables:**
+1. **Manage Jenkins > System > Global Properties > Environment Variables**
+2. Add:
+   - `EKS_CLUSTER_NAME` = `trend-eks-cluster`
+   - `AWS_DEFAULT_REGION` = `us-east-1`
+   - `AWS_ACCESS_KEY_ID` = your key
+   - `AWS_SECRET_ACCESS_KEY` = your secret
+
+---
+
+### Step 11 — Create Jenkins Pipeline Job
+
+1. **New Item** → name `trendstore-pipeline` → **Pipeline** → OK
+2. **Build Triggers** → check **GitHub hook trigger for GITScm polling**
+3. **Pipeline** → **Pipeline script from SCM**
+   - SCM: **Git**
+   - Repository URL: your GitHub repo URL
+   - Branch: `*/main`
+   - Script Path: `jenkins/Jenkinsfile`
+4. Click **Save**
+
+---
+
+### Step 12 — Set Up GitHub Webhook
+
+1. GitHub repo → **Settings > Webhooks > Add webhook**
+2. **Payload URL:** `http://<jenkins_ip>:8080/github-webhook/`
+3. **Content type:** `application/json`
+4. **Events:** Just the **push** event
+5. Click **Add webhook** — verify the green tick
+
+---
+
+### Step 13 — Test Auto-Trigger
+
+```bash
+echo "# trigger build" >> README.md
+git add README.md
+git commit -m "trigger Jenkins build"
+git push origin main
+```
+
+Jenkins should auto-trigger within seconds and run all 5 pipeline stages.
+
+---
+
+### Step 14 — Deploy Monitoring Stack
 
 ```bash
 cd monitoring
@@ -178,243 +291,56 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
-This will deploy:
-- Prometheus for metrics collection
-- Grafana for visualization
-
-#### Access Monitoring
-- **Prometheus**: `http://<prometheus-lb-ip>:9090`
-- **Grafana**: `http://<grafana-lb-ip>:3000`
-  - Username: `admin`
-  - Password: `admin123`
-
-#### Configure Grafana
-1. Add Prometheus data source: `http://prometheus-service:9090`
-2. Import Kubernetes dashboards
-
-## 📁 Project Structure
-
-```
-trend/
-├── dist/                   # Built React application
-├── terraform/             # Infrastructure as code
-│   ├── main.tf           # Main Terraform configuration
-│   ├── variables.tf      # Input variables
-│   └── outputs.tf        # Output variables
-├── k8s/                   # Kubernetes manifests
-│   ├── deployment.yaml   # Application deployment
-│   ├── service.yaml      # Service and Ingress
-│   └── loadbalancer.yaml # LoadBalancer service
-├── jenkins/              # Jenkins configuration
-│   ├── Jenkinsfile       # Declarative pipeline
-│   └── setup.sh          # Jenkins setup script
-├── monitoring/           # Monitoring stack
-│   ├── prometheus.yaml   # Prometheus deployment
-│   ├── grafana.yaml      # Grafana deployment
-│   └── setup.sh          # Monitoring setup script
-├── Dockerfile            # Docker configuration
-├── nginx.conf            # Nginx configuration
-├── .gitignore            # Git ignore rules
-└── .dockerignore         # Docker ignore rules
-```
-
-## 🔄 CI/CD Pipeline
-
-The Jenkins pipeline includes the following stages:
-
-1. **Checkout**: Pulls latest code from GitHub
-2. **Build Docker Image**: Creates Docker image with application
-3. **Test Docker Image**: Validates container functionality
-4. **Push to DockerHub**: Uploads image to registry
-5. **Deploy to Kubernetes**: Applies Kubernetes manifests
-
-### Pipeline Triggers
-- **Automatic**: Triggered by GitHub webhook on every push
-- **Manual**: Can be triggered manually from Jenkins UI
-
-## 📊 Monitoring and Observability
-
-### Prometheus Metrics
-- Container resource usage
-- Application response times
-- Kubernetes cluster health
-- Custom application metrics
-
-### Grafana Dashboards
-- Kubernetes cluster overview
-- Application performance metrics
-- Resource utilization
-- Error rates and alerts
-
-## 🔧 Configuration
-
-### Environment Variables
-Update the following files with your specific values:
-
-1. **jenkins/Jenkinsfile**:
-   - `DOCKER_IMAGE`: Your DockerHub repository
-   - Email addresses for notifications
-
-2. **k8s/deployment.yaml**:
-   - `image`: Your DockerHub image path
-
-3. **terraform/variables.tf**:
-   - AWS region and other infrastructure settings
-
-## 🚨 Troubleshooting
-
-### Common Issues
-
-1. **Docker Build Fails**:
-   - Ensure Docker Desktop is running
-   - Check Dockerfile syntax
-   - Verify all required files are present
-
-2. **Terraform Apply Fails**:
-   - Check AWS credentials
-   - Verify IAM permissions
-   - Review Terraform error logs
-
-3. **Kubernetes Deployment Fails**:
-   - Check kubeconfig configuration
-   - Verify EKS cluster status
-   - Review pod logs: `kubectl logs <pod-name>`
-
-4. **Jenkins Pipeline Fails**:
-   - Check webhook configuration
-   - Verify credentials setup
-   - Review Jenkins console output
-
-5. **Monitoring Issues**:
-   - Check monitoring namespace: `kubectl get pods -n monitoring`
-   - Verify service endpoints
-   - Review Prometheus targets
-
-### Useful Commands
-
+Access monitoring (wait ~2 min for LoadBalancer IPs):
 ```bash
-# Kubernetes
-kubectl get pods -o wide
-kubectl get services
-kubectl get deployment
-kubectl logs <pod-name>
-kubectl describe pod <pod-name>
-
-# Docker
-docker ps
-docker logs <container-id>
-docker inspect <container-id>
-
-# Terraform
-terraform plan
-terraform apply
-terraform destroy
-terraform output
-
-# Jenkins
-# Check Jenkins logs on EC2
-ssh -i your-key.pem ec2-user@<jenkins-ip>
-sudo tail -f /var/log/jenkins/jenkins.log
+kubectl get svc -n monitoring
 ```
 
-## 🧪 Testing
+- **Prometheus:** `http://<prometheus-lb-ip>:9090`
+- **Grafana:** `http://<grafana-lb-ip>:3000` (admin / admin123)
 
-### Local Testing
-```bash
-# Test application locally
-cd dist
-http-server -p 3000
-
-# Test Docker container
-docker build -t trend-test .
-docker run -d -p 8080:80 trend-test
-curl http://localhost:8080
-```
-
-### Integration Testing
-```bash
-# Test Kubernetes deployment
-kubectl port-forward service/trend-app-service 8080:80
-curl http://localhost:8080
-
-# Test monitoring
-kubectl port-forward service/prometheus-service 9090:9090 -n monitoring
-curl http://localhost:9090/targets
-```
-
-## 📈 Scaling
-
-### Horizontal Pod Autoscaling
-```bash
-# Create HPA for the application
-kubectl autoscale deployment trend-app --cpu-percent=50 --min=1 --max=10
-kubectl get hpa
-```
-
-### Cluster Scaling
-Update `terraform/main.tf` to modify EKS node group size:
-```hcl
-scaling_config {
-  desired_size = 3  # Increase for production
-  max_size     = 10
-  min_size     = 2
-}
-```
-
-## 🔐 Security Considerations
-
-1. **IAM Roles**: Principle of least privilege
-2. **Network Security**: VPC with private subnets
-3. **Secrets Management**: Use Kubernetes secrets for sensitive data
-4. **Container Security**: Regular base image updates
-5. **HTTPS**: Configure SSL/TLS for production
-
-## 💰 Cost Optimization
-
-1. **Use Spot Instances** for EKS worker nodes
-2. **Enable Auto-scaling** to match demand
-3. **Monitor Resource Usage** and right-size instances
-4. **Clean up unused resources** regularly
-
-## 📝 Maintenance
-
-### Regular Tasks
-- Update container images
-- Monitor cluster health
-- Backup Jenkins configuration
-- Review and update IAM policies
-- Apply security patches
-
-### Backup Procedures
-```bash
-# Backup Jenkins configuration
-scp -i your-key.pem ec2-user@<jenkins-ip>:/var/lib/jenkins/config.xml .
-
-# Backup Terraform state
-cp terraform/terraform.tfstate terraform/terraform.tfstate.backup
-```
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-## 📞 Support
-
-For issues and questions:
-- Create an issue in the GitHub repository
-- Check Jenkins logs for pipeline failures
-- Review Kubernetes events for deployment issues
-- Monitor Grafana dashboards for application health
+In Grafana:
+1. **Connections > Data Sources > Add** → Prometheus → URL: `http://prometheus-service.monitoring:9090`
+2. **Dashboards > Import** → ID `3119` (Kubernetes cluster overview) → Import
 
 ---
 
-**Note**: This setup is for demonstration purposes. For production use, ensure you:
-- Use proper domain names and SSL certificates
-- Implement robust backup strategies
-- Set up comprehensive logging and monitoring
-- Follow security best practices
-- Configure proper disaster recovery procedures
+### Step 15 — Cleanup
+
+```bash
+# Delete K8s resources first (avoids orphaned LoadBalancers)
+kubectl delete -f k8s/
+kubectl delete -f monitoring/
+
+# Destroy infrastructure
+cd terraform
+terraform destroy
+```
+
+---
+
+## Jenkins Pipeline Stages
+
+| Stage | What it does |
+|-------|-------------|
+| **Checkout** | Pulls latest code from GitHub |
+| **Build Docker Image** | Builds and tags `<username>/trend-app:$BUILD_NUMBER` |
+| **Test Docker Image** | Runs container on port 8081, curls health check |
+| **Push to DockerHub** | Pushes both `$BUILD_NUMBER` and `latest` tags |
+| **Deploy to EKS** | Updates kubeconfig, applies k8s manifests, sets new image, waits for rollout |
+
+---
+
+## Submission
+
+- GitHub repo URL submitted
+- README with setup steps, pipeline explanation, and screenshots
+- LoadBalancer EXTERNAL-IP documented
+- DockerHub image name with tag documented
+- Screenshots in repo:
+  - Jenkins pipeline — successful build + console output
+  - Terraform apply output
+  - EKS nodes (`kubectl get nodes`) and pods (`kubectl get pods`)
+  - DockerHub repo with image tags
+  - Deployed app in browser at LoadBalancer IP
+  - Grafana monitoring dashboard

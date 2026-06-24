@@ -1,23 +1,29 @@
 variable "aws_region" {
-  description = "AWS region for resources"
+  description = "AWS region for all resources"
   type        = string
-  default     = "us-east-1"
 }
 
 variable "environment" {
-  description = "Environment name"
+  description = "Environment name (e.g. production, staging)"
   type        = string
-  default     = "production"
 }
 
 variable "cluster_name" {
   description = "EKS cluster name"
   type        = string
-  default     = "trend-eks-cluster"
 }
 
 variable "node_instance_type" {
-  description = "EC2 instance type for EKS nodes"
+  description = "EC2 instance type for EKS worker nodes"
   type        = string
-  default     = "t3.medium"
+}
+
+variable "jenkins_instance_type" {
+  description = "EC2 instance type for Jenkins server"
+  type        = string
+}
+
+variable "key_name" {
+  description = "EC2 key pair name for SSH access to Jenkins"
+  type        = string
 }
