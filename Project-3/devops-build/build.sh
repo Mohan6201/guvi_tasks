@@ -1,39 +1,31 @@
 #!/bin/bash
-
-# Build script for Docker images
-# Usage: ./build.sh [dev|prod]
-
 set -e
 
-# Get the current branch name
-BRANCH=${1:-$(git rev-parse --abbrev-ref HEAD)}
-IMAGE_NAME="devops-react-app"
-DOCKERHUB_USERNAME="your-dockerhub-username"  # Replace with your Docker Hub username
+# Determine branch — Jenkins sets GIT_BRANCH, fallback to git for local runs
+BRANCH="${GIT_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
+# Strip origin/ prefix if present
+BRANCH="${BRANCH#origin/}"
 
-echo "Building Docker image for branch: $BRANCH"
+# Use Jenkins BUILD_NUMBER if available, else short commit hash
+TAG="${BUILD_NUMBER:-$(git rev-parse --short HEAD)}"
 
-# Determine tag based on branch
-if [ "$BRANCH" = "dev" ]; then
-    TAG="dev-latest"
-    REPO="$DOCKERHUB_USERNAME/dev"
-elif [ "$BRANCH" = "master" ] || [ "$BRANCH" = "main" ]; then
-    TAG="prod-latest"
-    REPO="$DOCKERHUB_USERNAME/prod"
+# Route to dev or prod DockerHub repo based on branch
+if [ "$BRANCH" = "master" ] || [ "$BRANCH" = "main" ]; then
+    IMAGE_NAME="${DOCKERHUB_USERNAME}/prod"
 else
-    TAG="feature-$BRANCH"
-    REPO="$DOCKERHUB_USERNAME/dev"
+    IMAGE_NAME="${DOCKERHUB_USERNAME}/dev"
 fi
 
-echo "Building image: $IMAGE_NAME:$TAG"
-echo "Target repository: $REPO"
+echo "Branch       : $BRANCH"
+echo "Image        : $IMAGE_NAME"
+echo "Tag          : $TAG"
 
-# Build the Docker image
 docker build -t "$IMAGE_NAME:$TAG" .
+docker tag "$IMAGE_NAME:$TAG" "$IMAGE_NAME:latest"
 
-# Tag for Docker Hub
-docker tag "$IMAGE_NAME:$TAG" "$REPO:$TAG"
+echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
 
-echo "Build completed successfully!"
-echo "Image tagged as: $REPO:$TAG"
-echo ""
-echo "To push to Docker Hub, run: docker push $REPO:$TAG"
+docker push "$IMAGE_NAME:$TAG"
+docker push "$IMAGE_NAME:latest"
+
+echo "Successfully pushed $IMAGE_NAME:$TAG"

@@ -1,19 +1,21 @@
 global:
-  smtp_smarthost: 'smtp.gmail.com:587'
-  smtp_from: 'your-email@gmail.com'
-  smtp_auth_username: 'your-email@gmail.com'
-  smtp_auth_password: 'your-app-password'
+  smtp_smarthost: '${SMTP_HOST}:${SMTP_PORT}'
+  smtp_from: '${SMTP_USER}'
+  smtp_auth_username: '${SMTP_USER}'
+  smtp_auth_password: '${SMTP_PASSWORD}'
+  smtp_require_tls: true
 
 route:
   group_by: ['alertname']
   group_wait: 10s
   group_interval: 10s
   repeat_interval: 1h
-  receiver: 'web.hook'
+  receiver: 'email-alert'
 
 receivers:
-  - name: 'web.hook'
+  - name: 'email-alert'
     email_configs:
-      - to: 'your-email@gmail.com'
+      - to: '${ALERT_EMAIL}'
+        send_resolved: true
         headers:
-          subject: '[Alert] Application Down: {{ .GroupLabels.alertname }}'
+          subject: '[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }} — React App Alert'
