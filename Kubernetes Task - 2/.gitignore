@@ -1,0 +1,9 @@
+# Local environment variables — never commit this
+.env
+
+# Kubernetes generated files
+kubeconfig
+*.kubeconfig
+
+# eksctl generated files
+eksctl-*.yaml
