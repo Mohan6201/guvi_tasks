@@ -1,64 +1,47 @@
 #!/bin/bash
-
-# Deploy script for Docker images to server
-# Usage: ./deploy.sh [dev|prod] [server-ip]
-
 set -e
 
-ENVIRONMENT=${1:-dev}
-SERVER_IP=${2:-localhost}
-DOCKERHUB_USERNAME="your-dockerhub-username"  # Replace with your Docker Hub username
-IMAGE_NAME="devops-react-app"
+# Determine branch — Jenkins sets GIT_BRANCH, fallback to git for local runs
+BRANCH="${GIT_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
+BRANCH="${BRANCH#origin/}"
 
-echo "Deploying $ENVIRONMENT environment to server: $SERVER_IP"
+TAG="${BUILD_NUMBER:-$(git rev-parse --short HEAD)}"
 
-# Determine image tag and repository
-if [ "$ENVIRONMENT" = "dev" ]; then
-    TAG="dev-latest"
-    REPO="$DOCKERHUB_USERNAME/dev"
-    CONTAINER_NAME="devops-react-app-dev"
-    PORT="8080"
-elif [ "$ENVIRONMENT" = "prod" ]; then
-    TAG="prod-latest"
-    REPO="$DOCKERHUB_USERNAME/prod"
-    CONTAINER_NAME="devops-react-app-prod"
+if [ "$BRANCH" = "master" ] || [ "$BRANCH" = "main" ]; then
+    IMAGE_NAME="${DOCKERHUB_USERNAME}/prod"
+    CONTAINER_NAME="ecommerce-prod"
     PORT="80"
 else
-    echo "Invalid environment. Use 'dev' or 'prod'"
-    exit 1
+    IMAGE_NAME="${DOCKERHUB_USERNAME}/dev"
+    CONTAINER_NAME="ecommerce-dev"
+    PORT="80"
 fi
 
-echo "Using image: $REPO:$TAG"
-echo "Container name: $CONTAINER_NAME"
-echo "Port: $PORT"
+echo "Branch         : $BRANCH"
+echo "Image          : $IMAGE_NAME:$TAG"
+echo "Container name : $CONTAINER_NAME"
+echo "Port           : $PORT"
 
-# Pull the latest image
-echo "Pulling latest image from Docker Hub..."
-docker pull "$REPO:$TAG"
+echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
 
-# Stop and remove existing container if it exists
-echo "Stopping existing container..."
+docker pull "$IMAGE_NAME:$TAG"
+
+# Stop and remove existing container if running
 docker stop "$CONTAINER_NAME" 2>/dev/null || true
 docker rm "$CONTAINER_NAME" 2>/dev/null || true
 
-# Run the new container
-echo "Starting new container..."
 docker run -d \
     --name "$CONTAINER_NAME" \
     --restart unless-stopped \
     -p "$PORT:80" \
-    -e NODE_ENV=production \
-    "$REPO:$TAG"
+    "$IMAGE_NAME:$TAG"
 
-echo "Deployment completed successfully!"
-echo "Application is running on http://$SERVER_IP:$PORT"
-
-# Wait a moment and check if container is running
+# Verify container started
 sleep 3
 if docker ps | grep -q "$CONTAINER_NAME"; then
-    echo "✅ Container is running successfully"
+    echo "App is running at http://$(curl -s ifconfig.me)"
 else
-    echo "❌ Container failed to start"
+    echo "Container failed to start"
     docker logs "$CONTAINER_NAME"
     exit 1
 fi
