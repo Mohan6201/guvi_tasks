@@ -1,0 +1,50 @@
+pipeline {
+    agent any
+
+    environment {
+        EMAIL_RECIPIENT = "${env.EMAIL_RECIPIENT ?: 'your-email@example.com'}"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                echo "Checking out source code..."
+                checkout scm
+            }
+        }
+
+        stage('Run Script') {
+            steps {
+                echo "Running hello.sh script..."
+                sh 'chmod +x scripts/hello.sh'
+                sh './scripts/hello.sh'
+            }
+        }
+    }
+
+    post {
+        always {
+            emailext(
+                subject: "Jenkins Build ${currentBuild.currentResult}: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                mimeType: 'text/html',
+                body: """
+                    <html>
+                    <body>
+                    <h2>Jenkins Build Notification</h2>
+                    <table border="1" cellpadding="6" cellspacing="0">
+                        <tr><td><b>Status</b></td><td>${currentBuild.currentResult}</td></tr>
+                        <tr><td><b>Job</b></td><td>${env.JOB_NAME}</td></tr>
+                        <tr><td><b>Build Number</b></td><td>#${env.BUILD_NUMBER}</td></tr>
+                        <tr><td><b>Branch</b></td><td>${env.GIT_BRANCH}</td></tr>
+                        <tr><td><b>Commit</b></td><td>${env.GIT_COMMIT}</td></tr>
+                        <tr><td><b>Duration</b></td><td>${currentBuild.durationString}</td></tr>
+                        <tr><td><b>Build URL</b></td><td><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></td></tr>
+                    </table>
+                    </body>
+                    </html>
+                """,
+                to: "${EMAIL_RECIPIENT}"
+            )
+        }
+    }
+}

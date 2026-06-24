@@ -1,0 +1,10 @@
+# Local environment variables — never commit this
+.env
+
+# Terraform state and cache
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+*.tfplan
+crash.log
