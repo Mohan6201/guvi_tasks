@@ -18,9 +18,7 @@ Launch **Linux EC2 instances in two different AWS regions** using a **single Ter
 
 ```
 Terraform Task/
-├── main.tf         # Single file — providers, security groups, and EC2 instances
-├── variables.tf    # Input variable declarations (no hardcoded values)
-├── outputs.tf      # Public IPs and SSH commands for both instances
+├── main.tf         # Single file — variables, providers, security groups, EC2 instances, and outputs
 ├── .env            # Your actual credentials and config — never commit this
 ├── .env.example    # Safe-to-commit template showing all required variables
 ├── .gitignore      # Excludes .env and Terraform state from git
