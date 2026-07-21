@@ -1,24 +1,27 @@
 #!/bin/bash
-set -e
+set -eo pipefail
 
 apt-get update -y
 apt-get install -y fontconfig curl gnupg
 
 # -------------------------------------------------------------------
-# Java 17 (required by Jenkins LTS)
+# Java 21 (current Jenkins LTS recommends 21 over 17 to avoid
+# service startup failures)
 # -------------------------------------------------------------------
 
-apt-get install -y openjdk-17-jre
+apt-get install -y openjdk-21-jre
 java -version
 
 # -------------------------------------------------------------------
 # Jenkins (LTS from official apt repo)
 # -------------------------------------------------------------------
 
-curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key \
-  | tee /usr/share/keyrings/jenkins-keyring.asc > /dev/null
+mkdir -p /etc/apt/keyrings
 
-echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] \
+curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key \
+  | tee /etc/apt/keyrings/jenkins-keyring.asc > /dev/null
+
+echo "deb [signed-by=/etc/apt/keyrings/jenkins-keyring.asc] \
   https://pkg.jenkins.io/debian-stable binary/" \
   | tee /etc/apt/sources.list.d/jenkins.list > /dev/null
 

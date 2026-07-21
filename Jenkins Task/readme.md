@@ -10,7 +10,7 @@ Launch **Jenkins** on an AWS EC2 instance, then explore creating **projects (job
 
 - **AWS EC2** — Ubuntu 22.04 Linux server to host Jenkins
 - **Jenkins** — CI/CD automation server
-- **Java 17** — Required runtime for Jenkins LTS
+- **Java 21** — Required runtime for Jenkins LTS
 - **Terraform** — Provisions the EC2 instance and security group
 
 ---
@@ -24,7 +24,7 @@ Jenkins Task/
 │   ├── variables.tf      # Input variable declarations (no hardcoded values)
 │   └── outputs.tf        # Outputs public IP, Jenkins URL, SSH command
 ├── scripts/
-│   └── setup_jenkins.sh  # Installs Java 17 and Jenkins on first boot
+│   └── setup_jenkins.sh  # Installs Java 21 and Jenkins on first boot
 ├── .env                  # Your actual credentials and config — never commit this
 ├── .env.example          # Safe-to-commit template showing all required variables
 ├── .gitignore            # Excludes .env and Terraform state from git
@@ -130,7 +130,7 @@ terraform apply
 Type `yes` when prompted. Terraform will:
 1. Launch an Ubuntu 22.04 EC2 instance
 2. Open port `22` (SSH) and port `8080` (Jenkins UI)
-3. Run `setup_jenkins.sh` via `user_data` on first boot — installs Java 17 and Jenkins automatically
+3. Run `setup_jenkins.sh` via `user_data` on first boot — installs Java 21 and Jenkins automatically
 
 Note the outputs:
 ```
@@ -238,7 +238,7 @@ Type `yes` when prompted. This terminates the EC2 instance and deletes the secur
 | Step | What it does |
 |------|-------------|
 | System update | `apt-get update` — refreshes package lists |
-| Install Java 17 | `openjdk-17-jre` — required runtime for Jenkins LTS |
+| Install Java 21 | `openjdk-21-jre` — required runtime for Jenkins LTS |
 | Add Jenkins repo | Adds the official Jenkins apt repository and GPG key |
 | Install Jenkins | `apt-get install jenkins` |
 | Start Jenkins | Enables and starts the `jenkins` systemd service on port `8080` |
