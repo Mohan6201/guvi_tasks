@@ -15,9 +15,11 @@ pipeline {
 
         stage('Run Script') {
             steps {
-                echo "Running hello.sh script..."
-                sh 'chmod +x scripts/hello.sh'
-                sh './scripts/hello.sh'
+                dir('Jenkins Task - 2') {
+                    echo "Running hello.sh script..."
+                    sh 'chmod +x scripts/hello.sh'
+                    sh './scripts/hello.sh'
+                }
             }
         }
     }
