@@ -29,10 +29,12 @@ Jenkins Task - 2/
 │   └── hello.sh              # Simple script that Jenkins builds
 ├── Jenkinsfile               # Declarative pipeline — runs script + sends email
 ├── .env                      # Your credentials and config — never commit this
-├── .env.example              # Safe-to-commit template
+├── .env.example               # Safe-to-commit template
 ├── .gitignore                # Excludes .env and Terraform state
 └── readme.md                 # This file
 ```
+
+> **Note:** this project lives inside the `guvi_tasks` monorepo, not its own repo root. The Jenkins job and Jenkinsfile are configured to account for that (see Step 13 and the `Jenkinsfile` details below).
 
 ---
 
@@ -45,12 +47,12 @@ Developer pushes commit to GitHub
 GitHub Webhook  →  POST to http://<jenkins_ip>:8080/github-webhook/
          │
          ▼
-Jenkins detects trigger  →  pulls latest code from GitHub
+Jenkins detects trigger  →  pulls latest code from GitHub (whole guvi_tasks repo)
          │
          ▼
-Jenkinsfile runs:
-  Stage 1: Checkout  →  clones repo
-  Stage 2: Run Script  →  executes scripts/hello.sh
+Jenkinsfile runs (from Jenkins Task - 2/Jenkinsfile):
+  Stage 1: Checkout        →  clones repo
+  Stage 2: Run Script      →  cd's into "Jenkins Task - 2/", then executes scripts/hello.sh
          │
          ▼
 Post-build: emailext sends HTML build report to EMAIL_RECIPIENT
@@ -64,7 +66,7 @@ Post-build: emailext sends HTML build report to EMAIL_RECIPIENT
 |----------|-------------|
 | `AWS_ACCESS_KEY_ID` | Your AWS Access Key ID |
 | `AWS_SECRET_ACCESS_KEY` | Your AWS Secret Access Key |
-| `TF_VAR_region` | AWS region (e.g. `us-east-1`) |
+| `TF_VAR_region` | AWS region (e.g. `ap-south-1`) |
 | `TF_VAR_instance_type` | EC2 instance type (e.g. `t2.medium`) |
 | `TF_VAR_key_name` | Key pair name for SSH |
 | `EMAIL_RECIPIENT` | Email address to receive build notifications |
@@ -86,56 +88,61 @@ Post-build: emailext sends HTML build report to EMAIL_RECIPIENT
 
 ---
 
-## Step-by-Step Setup
+## Step-by-Step Setup (as executed)
 
-### Step 1 — Set Up the `.env` File
+### Step 1 — Install prerequisites (one-time)
 
-```bash
-cp .env.example .env
+```powershell
+# Verify installs
+terraform -version
+aws --version
+```
+If missing: [Terraform](https://developer.hashicorp.com/terraform/downloads), [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html).
+
+---
+
+### Step 2 — Configure AWS credentials
+
+```powershell
+aws configure
+# AWS Access Key ID: <your key>
+# AWS Secret Access Key: <your secret>
+# Default region: ap-south-1
+# Default output format: json
 ```
 
-Fill in your values:
+---
 
-```env
-AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+### Step 3 — Create an EC2 key pair (if you don't have one)
 
-TF_VAR_region=us-east-1
-TF_VAR_instance_type=t2.medium
-TF_VAR_key_name=my-key-pair
-
-EMAIL_RECIPIENT=your-email@example.com
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=465
-SMTP_USER=your-gmail@gmail.com
-SMTP_PASSWORD=your_gmail_app_password
+```powershell
+aws ec2 create-key-pair --key-name my-key-pair --query 'KeyMaterial' --output text > "$env:USERPROFILE\.ssh\my-key-pair.pem"
 ```
+
+---
+
+### Step 4 — Generate a Gmail App Password
+
+1. Go to `myaccount.google.com` → **Security** → enable **2-Step Verification**.
+2. **Security → App Passwords** → app: Mail, device: Other → name it `Jenkins`.
+3. Click **Generate** — copy the 16-character password.
+
+---
+
+### Step 5 — Set up the `.env` file
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+```
+Fill in: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `TF_VAR_region`, `TF_VAR_instance_type`, `TF_VAR_key_name`, `EMAIL_RECIPIENT`, `SMTP_*` (with the Gmail App Password).
 
 > **Never commit `.env` to git.** It is already in `.gitignore`.
 
 ---
 
-### Step 2 — Generate a Gmail App Password
+### Step 6 — Load environment variables into the session
 
-Jenkins needs an App Password to send emails via Gmail:
-
-1. Go to your **Google Account > Security**
-2. Enable **2-Step Verification** if not already enabled
-3. Go to **Security > App Passwords**
-4. Select app: **Mail**, device: **Other** → type `Jenkins`
-5. Click **Generate** — copy the 16-character password
-6. Paste it as `SMTP_PASSWORD` in `.env`
-
----
-
-### Step 3 — Load Environment Variables and Deploy EC2
-
-**Linux / macOS:**
-```bash
-export $(cat .env | grep -v '#' | xargs)
-```
-
-**Windows (PowerShell):**
 ```powershell
 Get-Content .env | Where-Object { $_ -notmatch '^#' -and $_ -ne '' } | ForEach-Object {
     $key, $value = $_ -split '=', 2
@@ -143,149 +150,168 @@ Get-Content .env | Where-Object { $_ -notmatch '^#' -and $_ -ne '' } | ForEach-O
 }
 ```
 
-Then deploy:
-```bash
+---
+
+### Step 7 — Provision the EC2 instance with Terraform
+
+```powershell
 cd terraform
 terraform init
+terraform plan
 terraform apply
 ```
+Type `yes` when prompted. Note the output:
+```
+jenkins_url = "http://<public_ip>:8080"
+ssh_command = "ssh -i ~/.ssh/my-key-pair.pem ubuntu@<public_ip>"
+```
 
-Note the output:
-```
-jenkins_url = "http://3.x.x.x:8080"
-ssh_command = "ssh -i ~/.ssh/my-key-pair.pem ubuntu@3.x.x.x"
-```
+> If `terraform apply` fails with a DNS/network error (e.g. `dial tcp: lookup ec2.<region>.amazonaws.com: no such host`), it's almost always a transient network blip, not a config issue. Run `ipconfig /flushdns` and re-apply with `terraform apply "tfplan"`.
 
 ---
 
-### Step 4 — Unlock Jenkins
+### Step 8 — Retrieve the Jenkins initial admin password
 
-Wait **2-3 minutes**, then SSH in to get the initial admin password:
+Wait **2-3 minutes** for `user_data` to finish installing Jenkins, then:
 
+```powershell
+ssh -i "$env:USERPROFILE\.ssh\my-key-pair.pem" ubuntu@<public_ip>
+```
+Inside the SSH session:
 ```bash
-ssh -i ~/.ssh/<your-key>.pem ubuntu@<public_ip>
+ls jenkins_setup_done          # confirms setup_jenkins.sh finished successfully
 ./get_jenkins_password.sh
+exit
 ```
 
-Open `http://<public_ip>:8080`, paste the password, install suggested plugins, and create your admin user.
+> If `jenkins_setup_done` is missing or Jenkins isn't reachable, check `sudo cat /var/log/cloud-init-output.log` on the instance for the real error before assuming Jenkins is broken.
 
 ---
 
-### Step 5 — Install Required Jenkins Plugins
+### Step 9 — Unlock Jenkins (browser)
 
-Go to **Manage Jenkins > Plugins > Available plugins** and install:
+1. Open `http://<public_ip>:8080`.
+2. Paste the initial admin password.
+3. Choose **Install suggested plugins**.
+4. Create your admin user (username/password).
 
-| Plugin | Purpose |
-|--------|---------|
-| **Git** | Clone GitHub repositories |
-| **GitHub** | GitHub webhook integration |
-| **Pipeline** | Run Jenkinsfile pipelines |
-| **Email Extension (emailext)** | Rich HTML email notifications |
-
-Restart Jenkins after installation.
+📸 **Screenshot**: Jenkins dashboard after login.
 
 ---
 
-### Step 6 — Configure SMTP Email in Jenkins
+### Step 10 — Install required plugins
 
-1. Go to **Manage Jenkins > System**
-2. Scroll to **Extended E-mail Notification**
-3. Fill in:
-   - **SMTP server:** `smtp.gmail.com`
-   - **SMTP Port:** `465`
-   - Click **Advanced**
-   - Check **Use SSL**
-   - **Credentials:** click **Add** → **Jenkins** → Kind: **Username with password**
-     - Username: your Gmail address
-     - Password: your Gmail App Password
-   - Select the credential you just added
-   - **Default user e-mail suffix:** `@gmail.com`
-4. Scroll to **Default Recipients** → enter your email
-5. Click **Test configuration by sending test e-mail** to verify
-6. Click **Save**
+**Manage Jenkins → Plugins → Available plugins** → install: `Git`, `GitHub`, `Pipeline`, `Email Extension Plugin` → restart Jenkins if prompted.
 
 ---
 
-### Step 7 — Set EMAIL_RECIPIENT as a Jenkins Global Environment Variable
+### Step 11 — Configure SMTP for email
 
-1. Go to **Manage Jenkins > System**
-2. Scroll to **Global Properties**
-3. Check **Environment variables**
-4. Click **Add**:
-   - Name: `EMAIL_RECIPIENT`
-   - Value: your email address
-5. Click **Save**
+**Manage Jenkins → System → Extended E-mail Notification**:
+- SMTP server: `smtp.gmail.com`
+- SMTP Port: `465` → **Advanced** → check **Use SSL**
+- Credentials → **Add → Jenkins** → Kind: Username with password → your Gmail address / App Password → select it
+- Default user e-mail suffix: `@gmail.com`
+- Default Recipients: your email
+- Click **Test configuration by sending test e-mail** → confirm it arrives
+
+📸 **Screenshot**: SMTP config screen + test email success.
 
 ---
 
-### Step 8 — Create a Pipeline Job
+### Step 12 — Set `EMAIL_RECIPIENT` as a global Jenkins env var
 
-1. From Jenkins dashboard → **New Item**
-2. Name: `jenkins-task-2-pipeline`
-3. Select **Pipeline** → click **OK**
-4. Under **Build Triggers**, check **GitHub hook trigger for GITScm polling**
-5. Under **Pipeline**, select **Pipeline script from SCM**
-   - SCM: **Git**
-   - Repository URL: your GitHub repo URL (e.g. `https://github.com/<username>/<repo>.git`)
+**Manage Jenkins → System → Global Properties** → check **Environment variables** → Add: `EMAIL_RECIPIENT` = your email → **Save**.
+
+---
+
+### Step 13 — Create the Pipeline job
+
+1. Dashboard → **New Item** → name `jenkins-task-2-pipeline` → type **Pipeline** → OK.
+2. **Build Triggers** → check **GitHub hook trigger for GITScm polling**.
+3. **Pipeline** section → Definition: **Pipeline script from SCM** → SCM: **Git**.
+   - Repository URL: `https://github.com/Mohan6201/guvi_tasks.git`
    - Branch: `*/main`
-   - Script Path: `Jenkinsfile`
-6. Click **Save**
+   - Script Path: `Jenkins Task - 2/Jenkinsfile`
+
+   > This repo is a monorepo — `Jenkins Task - 2` is a subdirectory, not the repo root. The Script Path above tells Jenkins where to find the Jenkinsfile after cloning the whole repo.
+4. **Save**.
+
+📸 **Screenshot**: pipeline job configuration page.
 
 ---
 
-### Step 9 — Set Up GitHub Webhook
+### Step 14 — Set up the GitHub webhook
 
-1. Go to your GitHub repository → **Settings > Webhooks > Add webhook**
-2. Fill in:
-   - **Payload URL:** `http://<jenkins_public_ip>:8080/github-webhook/`
-   - **Content type:** `application/json`
-   - **Which events:** select **Just the push event**
-3. Click **Add webhook**
-4. GitHub will send a test ping — you should see a green tick next to the webhook
+1. GitHub repo → **Settings → Webhooks → Add webhook**.
+2. Payload URL: `http://<public_ip>:8080/github-webhook/`
+3. Content type: `application/json`
+4. Events: **Just the push event** → **Add webhook**.
+5. Confirm the green checkmark appears (successful ping).
+
+📸 **Screenshot**: webhook with green tick.
 
 ---
 
-### Step 10 — Test the Full Pipeline
+### Step 15 — Trigger a build with a real commit
 
-Make a change to `scripts/hello.sh` or any file and push to GitHub:
-
-```bash
-echo "# trigger build" >> scripts/hello.sh
+```powershell
+cd "..\Jenkins Task - 2"
+Add-Content scripts\hello.sh "`n# trigger build $(Get-Date)"
 git add .
 git commit -m "Trigger Jenkins build"
 git push origin main
 ```
 
-Within seconds, Jenkins should:
-1. Detect the webhook trigger
-2. Pull the latest code
-3. Run `scripts/hello.sh`
-4. Send an HTML email with the build result
+---
+
+### Step 16 — Verify the build ran automatically
+
+In Jenkins, open the job → confirm a new build started within seconds of the push (console shows `Started by GitHub push by <username>`) → click into **Console Output**.
+
+📸 **Screenshot**: build console output showing SUCCESS.
 
 ---
 
-### Step 11 — Verify the Email
+### Step 17 — Check your inbox
 
-Check your inbox for an email with subject:
-```
-Jenkins Build SUCCESS: jenkins-task-2-pipeline #1
-```
+Look for subject `Jenkins Build SUCCESS: jenkins-task-2-pipeline #<n>`.
 
-The email contains:
-- Build status
-- Job name and build number
-- Git branch and commit hash
-- Build duration
-- Direct link to the build console output
+📸 **Screenshot**: the received email.
 
 ---
 
-### Step 12 — Destroy Resources (Cleanup)
+### Step 18 — Add screenshots to the repo and push
 
-```bash
+```powershell
+mkdir screenshots
+# move/save the screenshots into this folder
+git add screenshots
+git commit -m "Add Jenkins Task 2 output screenshots"
+git push origin main
+```
+
+---
+
+### Step 19 — Clean up AWS resources (after submission, to avoid charges)
+
+```powershell
 cd terraform
 terraform destroy
 ```
+Type `yes` to confirm.
+
+---
+
+## Issues Hit During Setup and Fixes Applied
+
+| Issue | Cause | Fix |
+|---|---|---|
+| `terraform apply` failed with `dial tcp: lookup ec2.ap-south-1.amazonaws.com: no such host` | Transient DNS/network blip on the local machine at the moment of the API call | Flushed DNS (`ipconfig /flushdns`) and re-ran `terraform apply "tfplan"` — succeeded on retry |
+| Jenkins installed but wouldn't start reliably | `setup_jenkins.sh` used `openjdk-17-jre`, but current Jenkins LTS requires Java 21 | Switched to `openjdk-21-jre` |
+| `apt-get install` intermittently failed with `Could not get lock /var/lib/dpkg/lock-frontend` | Ubuntu's background `unattended-upgrades`/`apt-daily` service races with `user_data` for the dpkg lock on first boot | Added a `wait_for_apt_lock` retry loop before every apt command, plus `set -euo pipefail` |
+| Jenkins apt repo failed GPG verification | Signing key file `jenkins.io-2023.key` is outdated/rotated | Updated to the current `jenkins.io-2026.key`, moved keyring to the now-standard `/etc/apt/keyrings` path |
+| Pipeline failed: `chmod: cannot access 'scripts/hello.sh': No such file or directory` | The GitHub repo is a monorepo — `checkout scm` clones the full `guvi_tasks` repo, so `scripts/hello.sh` actually lives under `Jenkins Task - 2/scripts/hello.sh`, not at the workspace root | Wrapped the `Run Script` stage in `dir('Jenkins Task - 2') { ... }` so relative paths resolve correctly |
 
 ---
 
@@ -297,12 +323,12 @@ The simple script Jenkins executes. Prints build timestamp, hostname, git branch
 ### `Jenkinsfile`
 Declarative pipeline with two stages:
 - **Checkout** — pulls code from GitHub
-- **Run Script** — executes `scripts/hello.sh`
+- **Run Script** — `cd`s into `Jenkins Task - 2/` (since the repo is a monorepo) and executes `scripts/hello.sh`
 
 The `post { always { } }` block sends an HTML email after every build regardless of result (success or failure).
 
 ### `scripts/setup_jenkins.sh`
-Runs on EC2 first boot via Terraform `user_data`. Installs Java 21, adds the official Jenkins apt repo, installs and starts Jenkins.
+Runs on EC2 first boot via Terraform `user_data`. Waits out any background apt lock, installs Java 21, adds the official Jenkins apt repo (current signing key), installs and starts Jenkins, and writes a `jenkins_setup_done` marker file on completion for easy verification.
 
 ---
 
@@ -319,5 +345,5 @@ Runs on EC2 first boot via Terraform `user_data`. Installs Java 21, adds the off
 
 - Push all files (including `.env.example` and output screenshots) to GitHub
 - **Do not push `.env`** — it is gitignored
-- Screenshots to include: Jenkins pipeline job, successful build console output, and the email received in inbox
+- Screenshots to include: Jenkins pipeline job, webhook trigger log, successful build console output, and the email received in inbox
 - Submit the GitHub repository URL in the portal
