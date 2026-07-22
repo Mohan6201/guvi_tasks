@@ -11,7 +11,7 @@ Create a simple script, push it to GitHub, connect Jenkins to the repo, and conf
 - **AWS EC2** — Ubuntu 22.04 server to host Jenkins
 - **Jenkins** — CI/CD automation with GitHub integration and email notifications
 - **GitHub** — Source code repository + webhook to trigger builds
-- **Java 17** — Required runtime for Jenkins LTS
+- **Java 21** — Required runtime for current Jenkins LTS
 - **Terraform** — Provisions the EC2 instance and security group
 
 ---
@@ -25,7 +25,7 @@ Jenkins Task - 2/
 │   ├── variables.tf          # Input variable declarations
 │   └── outputs.tf            # Jenkins URL, SSH command
 ├── scripts/
-│   ├── setup_jenkins.sh      # Installs Java 17 + Jenkins on EC2 first boot
+│   ├── setup_jenkins.sh      # Installs Java 21 + Jenkins on EC2 first boot
 │   └── hello.sh              # Simple script that Jenkins builds
 ├── Jenkinsfile               # Declarative pipeline — runs script + sends email
 ├── .env                      # Your credentials and config — never commit this
@@ -302,7 +302,7 @@ Declarative pipeline with two stages:
 The `post { always { } }` block sends an HTML email after every build regardless of result (success or failure).
 
 ### `scripts/setup_jenkins.sh`
-Runs on EC2 first boot via Terraform `user_data`. Installs Java 17, adds the official Jenkins apt repo, installs and starts Jenkins.
+Runs on EC2 first boot via Terraform `user_data`. Installs Java 21, adds the official Jenkins apt repo, installs and starts Jenkins.
 
 ---
 
