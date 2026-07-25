@@ -10,14 +10,14 @@ version: 0.2
 
 phases:
   install:
-   runtime-versions:
-    nodejs: 18
+    runtime-versions:
+      nodejs: 18
     commands:
       - |
         set -e
         echo "Verifying tooling (managed image already has docker + aws cli)..."
         aws --version
-        docker --version
+        docker --versions
 
   pre_build:
     commands:
