@@ -1,0 +1,76 @@
+version: 0.2
+# Deploy stage: this is the actual "Deploy to EKS" step for CodePipeline.
+#
+# CodePipeline has no built-in "Deploy to EKS" action type, and AWS
+# CodeDeploy does not support EKS as a compute platform (only
+# EC2/On-Premises, Lambda, ECS) - so the CodeDeploy/appspec.yml approach
+# that used to live in this repo could never actually work for EKS.
+# The standard/AWS-documented pattern instead is a second CodeBuild
+# project used as the pipeline's Deploy action, which runs kubectl.
+# That's what this buildspec does.
+#
+# Input: the artifact produced by buildspec.yml (image-uri.txt + k8s/*).
+# All config values are CodeBuild environment variables injected from
+# .env by codebuild-setup.sh.
+
+phases:
+  install:
+    commands:
+      - |
+        set -e
+        echo "Installing kubectl..."
+        KUBECTL_VERSION="$(curl -L -s https://dl.k8s.io/release/stable.txt)"
+        curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+        chmod +x kubectl && mv kubectl /usr/local/bin/kubectl
+        kubectl version --client
+
+  pre_build:
+    commands:
+      - |
+        set -e
+        echo "Pointing kubectl at EKS cluster ${EKS_CLUSTER_NAME}..."
+        aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
+        kubectl get nodes
+
+  build:
+    commands:
+      - |
+        set -e
+        IMAGE_URI="$(cat image-uri.txt)"
+        echo "Deploying image: $IMAGE_URI"
+
+        chmod +x k8s/render.sh
+        IMAGE_URI="$IMAGE_URI" k8s/render.sh "IMAGE_URI=${IMAGE_URI}"
+
+        kubectl apply -f k8s/rendered/namespace.yaml
+
+        echo "Refreshing ECR pull secret..."
+        kubectl create secret docker-registry ecr-registry-secret \
+          --docker-server="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com" \
+          --docker-username=AWS \
+          --docker-password="$(aws ecr get-login-password --region "$AWS_REGION")" \
+          --namespace="$K8S_NAMESPACE" \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+        kubectl apply -f k8s/rendered/deployment.yaml
+        kubectl apply -f k8s/rendered/service.yaml
+
+        echo "Waiting for rollout..."
+        kubectl rollout status "deployment/${APP_NAME}" -n "$K8S_NAMESPACE" --timeout=300s
+
+  post_build:
+    commands:
+      - |
+        set -e
+        echo "Pods:"
+        kubectl get pods -n "$K8S_NAMESPACE" -l "app=${APP_NAME}"
+        echo "Waiting for LoadBalancer hostname..."
+        for i in $(seq 1 18); do
+          LB=$(kubectl get service "${APP_NAME}-service" -n "$K8S_NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+          if [ -n "$LB" ]; then
+            echo "Application URL: http://${LB}"
+            break
+          fi
+          sleep 10
+        done
+        echo "Deploy stage complete."

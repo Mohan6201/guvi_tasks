@@ -1,50 +1,73 @@
 version: 0.2
+# Build stage: builds the Docker image and pushes it to ECR.
+# Every value below (AWS_REGION, ECR_REPOSITORY_NAME, APP_NAME, ...) is
+# injected as a CodeBuild environment variable from .env by
+# codebuild-setup.sh - nothing here is hardcoded.
+#
+# NOTE: CodeBuild runs each item under `commands:` as its own shell, so
+# `cd`/exported vars do NOT carry between list items. Each phase below is
+# written as a single `|` shell block for that reason.
 
 phases:
   install:
-    runtime-versions:
-      docker: 20
+   runtime-versions:
+    nodejs: 18
     commands:
-      - echo Installing Docker and AWS CLI...
-      - apt-get update
-      - apt-get install -y awscli
-      - echo Logging in to Amazon ECR...
-      - aws --version
-      - docker --version
-      
+      - |
+        set -e
+        echo "Verifying tooling (managed image already has docker + aws cli)..."
+        aws --version
+        docker --version
+
   pre_build:
     commands:
-      - echo Logging in to Amazon ECR...
-      - AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-      - AWS_REGION=us-east-1
-      - ECR_REGISTRY=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-      - ECR_REPOSITORY=brain-tasks-app
-      - IMAGE_TAG=${CODEBUILD_RESOLVED_SOURCE_VERSION}
-      - echo $ECR_REGISTRY
-      - echo $ECR_REPOSITORY
-      - echo $IMAGE_TAG
-      - aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
-      
+      - |
+        set -e
+        WORKDIR="${CODEBUILD_SRC_DIR}/${SOURCE_DIR:-.}"
+        echo "Working directory: $WORKDIR"
+        cd "$WORKDIR"
+        ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        echo "Logging in to Amazon ECR ($ECR_REGISTRY)..."
+        aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+        RESOLVED_TAG="${CODEBUILD_RESOLVED_SOURCE_VERSION:-$IMAGE_TAG}"
+        echo "Registry:$ECR_REGISTRY Repo:$ECR_REPOSITORY_NAME Tag:$RESOLVED_TAG"
+        echo "$RESOLVED_TAG" > /tmp/resolved_tag.txt
+
   build:
     commands:
-      - echo Build started on `date`
-      - echo Building the Docker image...
-      - docker build -t ${ECR_REPOSITORY}:latest .
-      - docker tag ${ECR_REPOSITORY}:latest ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
-      - docker tag ${ECR_REPOSITORY}:latest ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
-      
+      - |
+        set -e
+        WORKDIR="${CODEBUILD_SRC_DIR}/${SOURCE_DIR:-.}"
+        cd "$WORKDIR"
+        ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        RESOLVED_TAG="$(cat /tmp/resolved_tag.txt)"
+        echo "Installing dependencies and building the React app..."
+        npm ci
+        npm run build
+        echo "Building Docker image..."
+        docker build -t "${ECR_REPOSITORY_NAME}:${RESOLVED_TAG}" .
+        docker tag "${ECR_REPOSITORY_NAME}:${RESOLVED_TAG}" "${ECR_REGISTRY}/${ECR_REPOSITORY_NAME}:${RESOLVED_TAG}"
+        docker tag "${ECR_REPOSITORY_NAME}:${RESOLVED_TAG}" "${ECR_REGISTRY}/${ECR_REPOSITORY_NAME}:latest"
+
   post_build:
     commands:
-      - echo Build completed on `date`
-      - echo Pushing the Docker images...
-      - docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
-      - docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
-      - echo Writing image definitions file...
-      - printf '[{"name":"brain-tasks-app","imageUri":"%s"}]' ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG} > imagedefinitions.json
-      - cat imagedefinitions.json
+      - |
+        set -e
+        WORKDIR="${CODEBUILD_SRC_DIR}/${SOURCE_DIR:-.}"
+        cd "$WORKDIR"
+        ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        RESOLVED_TAG="$(cat /tmp/resolved_tag.txt)"
+        echo "Pushing image to ECR..."
+        docker push "${ECR_REGISTRY}/${ECR_REPOSITORY_NAME}:${RESOLVED_TAG}"
+        docker push "${ECR_REGISTRY}/${ECR_REPOSITORY_NAME}:latest"
+        echo "Writing image reference artifacts for the deploy stage..."
+        printf '%s' "${ECR_REGISTRY}/${ECR_REPOSITORY_NAME}:${RESOLVED_TAG}" > image-uri.txt
+        printf '[{"name":"%s","imageUri":"%s"}]' "${APP_NAME}" "${ECR_REGISTRY}/${ECR_REPOSITORY_NAME}:${RESOLVED_TAG}" > imagedefinitions.json
+        cat image-uri.txt
 
 artifacts:
   files:
+    - image-uri.txt
     - imagedefinitions.json
     - k8s/**/*
-    - appspec.yml
+  base-directory: "$CODEBUILD_SRC_DIR/$SOURCE_DIR"

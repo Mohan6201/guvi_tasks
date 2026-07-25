@@ -1,30 +1,37 @@
 #!/bin/bash
+# ============================================================
+# ECR Registry Setup - creates the repository that will store
+# Docker images for the app. All values come from .env.
+# ============================================================
+set -e
 
-# AWS ECR Repository Setup Script
-# Make sure AWS CLI is configured with appropriate permissions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ ! -f "$SCRIPT_DIR/.env" ]; then
+  echo "ERROR: .env not found. Run: cp .env.example .env   (then fill in values)" >&2
+  exit 1
+fi
+set -a
+source "$SCRIPT_DIR/.env"
+set +a
 
-# Variables
-AWS_REGION="us-east-1"
-REPOSITORY_NAME="brain-tasks-app"
-AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+echo "Setting up ECR repository '${ECR_REPOSITORY_NAME}' in ${AWS_REGION}..."
 
-echo "Setting up ECR repository for ${REPOSITORY_NAME}..."
-
-# Create ECR repository
 aws ecr create-repository \
-    --repository-name ${REPOSITORY_NAME} \
-    --region ${AWS_REGION} \
-    --image-scanning-configuration scanOnPush=true \
-    --image-tag-mutability MUTABLE || echo "Repository may already exist"
+  --repository-name "${ECR_REPOSITORY_NAME}" \
+  --region "${AWS_REGION}" \
+  --image-scanning-configuration scanOnPush=true \
+  --image-tag-mutability MUTABLE \
+  || echo "Repository may already exist, continuing..."
 
-# Get repository URI
-ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${REPOSITORY_NAME}"
+ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY_NAME}"
 echo "ECR Repository URI: ${ECR_URI}"
 
-# Authenticate Docker with ECR
-aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+echo "Authenticating local Docker with ECR..."
+aws ecr get-login-password --region "${AWS_REGION}" \
+  | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
-echo "ECR setup complete!"
-echo "To push your image, run:"
-echo "docker tag brain-tasks-app:latest ${ECR_URI}:latest"
-echo "docker push ${ECR_URI}:latest"
+echo ""
+echo "ECR setup complete."
+echo "To push manually:"
+echo "  docker tag ${APP_NAME}:${IMAGE_TAG} ${ECR_URI}:${IMAGE_TAG}"
+echo "  docker push ${ECR_URI}:${IMAGE_TAG}"

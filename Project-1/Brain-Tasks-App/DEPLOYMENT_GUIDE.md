@@ -1,182 +1,198 @@
 # AWS Deployment Guide - Brain Tasks App
 
-## 🎯 Deployment Status: READY FOR PRODUCTION
+Everything in this project is driven by a single `.env` file. No script
+hardcodes an account ID, region, cluster name, or repo name - change a
+value once in `.env` and every script/buildspec picks it up.
 
-Your Brain Tasks App is now fully configured and ready for AWS deployment. All necessary files have been created and tested locally.
+## 0. One-time local prerequisites
 
-## ✅ Completed Tasks
-
-### Application Layer
-- ✅ React application with modern UI
-- ✅ Local development on port 3000
-- ✅ Production build optimization
-- ✅ Docker containerization with nginx
-- ✅ Local Docker testing on port 8080
-
-### Infrastructure Layer
-- ✅ ECR repository configuration
-- ✅ EKS cluster setup scripts
-- ✅ Kubernetes manifests (deployment, service, namespace)
-- ✅ Health checks and resource limits
-- ✅ Load balancer configuration
-
-### CI/CD Pipeline
-- ✅ CodeBuild configuration (buildspec.yml)
-- ✅ CodeDeploy configuration (appspec.yml)
-- ✅ Deployment hooks (before_install, after_install, start, validate)
-- ✅ Git repository initialized
-- ✅ Comprehensive documentation
-
-## 🚀 Next Steps for Full AWS Deployment
-
-### 1. Push to GitHub
-```bash
-# Add remote repository
-git remote add origin <your-github-repo-url>
-
-# Push to GitHub
-git push -u origin main
-```
-
-### 2. AWS Infrastructure Setup
-```bash
-# Setup ECR repository
-chmod +x ecr-setup.sh
-./ecr-setup.sh
-
-# Setup EKS cluster (requires IAM roles)
-chmod +x eks-setup.sh
-./eks-setup.sh
-```
-
-### 3. Update Configuration
-Before deployment, update these files:
-- `k8s/deployment.yaml`: Replace `123456789012` with your AWS account ID
-- Ensure IAM roles have proper permissions for EKS and ECR
-
-### 4. Create CodePipeline
-1. **AWS Console → CodePipeline → Create pipeline**
-2. **Source**: GitHub repository
-3. **Build**: Use existing buildspec.yml
-4. **Deploy**: Use existing appspec.yml
-
-### 5. Required IAM Roles
-- `EKSClusterRole`: For EKS cluster management
-- `EKSNodeRole`: For EKS worker nodes
-- `CodeBuildServiceRole`: For CodeBuild execution
-- `CodeDeployServiceRole`: For CodeDeploy execution
-
-## 📊 Deployment Architecture
-
-```
-GitHub → CodePipeline → CodeBuild → ECR → CodeDeploy → EKS → LoadBalancer
-```
-
-### Flow Explanation:
-1. **CodePipeline** triggers on GitHub push
-2. **CodeBuild** builds Docker image and pushes to ECR
-3. **CodeDeploy** updates Kubernetes deployment
-4. **EKS** runs the application pods
-5. **LoadBalancer** exposes the application publicly
-
-## 🔧 Manual Deployment (Alternative)
-
-If you prefer manual deployment instead of CodePipeline:
+- AWS CLI v2, configured (`aws sts get-caller-identity` should work)
+- `kubectl`
+- Docker Desktop running (for local image build/testing only - CodeBuild
+  builds the production image, Docker Desktop is not required for AWS
+  deployment itself)
+- Node.js 18+ (for local `npm run dev`)
 
 ```bash
-# 1. Build and push to ECR
-npm run build
-docker build -t brain-tasks-app:latest .
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com
-docker tag brain-tasks-app:latest $(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com/brain-tasks-app:latest
-docker push $(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com/brain-tasks-app:latest
-
-# 2. Deploy to EKS
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/deployment.yaml
-kubectl apply -f k8s/service.yaml
-
-# 3. Check deployment
-kubectl get pods -n brain-tasks
-kubectl get services -n brain-tasks
+cd Brain-Tasks-App
+cp .env.example .env
 ```
 
-## 📈 Production Considerations
+Open `.env` and fill in real values - at minimum `AWS_ACCOUNT_ID`,
+`AWS_REGION`, and `GITHUB_REPO_URL`. `.env` is gitignored; never commit it.
 
-### Monitoring Setup
-- CloudWatch logs for application monitoring
-- CloudWatch metrics for performance tracking
-- Set up alerts for pod failures
+## Why this sequence
 
-### Security Enhancements
-- Enable VPC endpoints for ECR
-- Use private subnets for EKS nodes
-- Implement network policies
-- Enable EKS encryption
+Each stage's script assumes the previous stage's resources already exist:
+IAM roles are the trust anchor for everything else, ECR must exist before
+CodeBuild can push to it, EKS must exist before CodeBuild can deploy to
+it, and CodePipeline just wires the pieces already created together.
+Skipping ahead will fail with a clear "role/repo/cluster not found" error.
 
-### Scaling Configuration
-- Horizontal Pod Autoscaler for automatic scaling
-- Cluster Autoscaler for node scaling
-- Load balancer health checks
+```
+iam-setup.sh -> ecr-setup.sh -> eks-setup.sh -> codebuild-setup.sh -> (manual: GitHub connection) -> codepipeline-setup.sh
+```
 
-## 🎯 Load Balancer Access
+## 1. IAM roles
 
-After deployment, get the Load Balancer URL:
 ```bash
-kubectl get service brain-tasks-app-service -n brain-tasks -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+chmod +x iam-setup.sh && ./iam-setup.sh
 ```
 
-## 📞 Support Commands
+Creates (idempotent - safe to re-run):
+- `EKSClusterRole` - lets EKS manage the cluster control plane
+- `EKSNodeRole` - lets EC2 worker nodes join the cluster and pull from ECR
+- `CodeBuildServiceRole` - lets CodeBuild push to ECR, write CloudWatch
+  logs, and (for the deploy project) describe/talk to the EKS cluster
+- `CodePipelineServiceRole` - lets CodePipeline invoke CodeBuild and read
+  the S3 artifact bucket
 
-### Debugging Deployment
+## 2. ECR (Registry)
+
 ```bash
-# Check pod status
-kubectl get pods -n brain-tasks -w
-
-# View pod logs
-kubectl logs -n brain-tasks -l app=brain-tasks-app -f
-
-# Check deployment events
-kubectl get events -n brain-tasks --sort-by=.metadata.creationTimestamp
-
-# Describe deployment
-kubectl describe deployment brain-tasks-app -n brain-tasks
+chmod +x ecr-setup.sh && ./ecr-setup.sh
 ```
 
-### Service Status
+Creates the `$ECR_REPOSITORY_NAME` repository with image scanning on push,
+and logs your local Docker in to it (useful for step 2b, manual testing).
+
+**2b. Manual local build/test (optional, proves the Dockerfile works):**
+
 ```bash
-# Check service endpoints
-kubectl get endpoints brain-tasks-app-service -n brain-tasks
-
-# Check load balancer status
-kubectl describe service brain-tasks-app-service -n brain-tasks
+npm install && npm run build      # produces dist/
+docker build -t $APP_NAME:$IMAGE_TAG .
+docker run -d -p 8080:80 --name brain-tasks-test $APP_NAME:$IMAGE_TAG
+# visit http://localhost:8080, then:
+docker stop brain-tasks-test && docker rm brain-tasks-test
 ```
 
-## ✅ Deployment Checklist
+## 3. EKS (Kubernetes)
 
-Before going to production, verify:
+```bash
+chmod +x eks-setup.sh && ./eks-setup.sh
+```
 
-- [ ] AWS account ID updated in deployment.yaml
-- [ ] IAM roles created and attached
-- [ ] ECR repository created
-- [ ] EKS cluster running
-- [ ] kubectl configured for EKS
-- [ ] GitHub repository connected
-- [ ] CodePipeline configured
-- [ ] Security groups configured
-- [ ] Monitoring enabled
+Creates the `$EKS_CLUSTER_NAME` cluster (~10-15 min) and a managed node
+group `$EKS_NODE_GROUP_NAME` (~5-10 min), points local `kubectl` at it,
+and grants both your IAM identity and the CodeBuild deploy role
+cluster-admin access via EKS access entries (no manual `aws-auth`
+ConfigMap editing needed). Ends by printing `kubectl get nodes` -
+confirm nodes show `Ready` before moving on.
 
-## 🎉 Success Metrics
+## 4. CodeBuild (Build + Deploy projects)
 
-Your deployment is successful when:
-- Application is accessible via Load Balancer URL
-- All 3 pods are running and healthy
-- Load balancer responds to HTTP requests
-- CodePipeline runs without errors
-- CloudWatch logs are collecting data
+```bash
+chmod +x codebuild-setup.sh && ./codebuild-setup.sh
+```
 
----
+Creates two projects, both reading their config as CodeBuild
+environment variables injected straight from `.env`:
 
-**Ready for Production!** 🚀
+- **`$CODEBUILD_BUILD_PROJECT`** (`buildspec.yml`, privileged mode on):
+  `npm run build` -> `docker build` -> push to ECR -> writes
+  `image-uri.txt` / `imagedefinitions.json` as artifacts.
+- **`$CODEBUILD_DEPLOY_PROJECT`** (`buildspec-deploy.yml`): installs
+  `kubectl`, points it at `$EKS_CLUSTER_NAME`, renders `k8s/*.yaml`
+  templates with the real image URI, applies them, waits for rollout,
+  prints the LoadBalancer hostname.
 
-Your Brain Tasks App is now fully configured with enterprise-grade AWS infrastructure and CI/CD pipeline.
+If the source repo is a monorepo (this project lives at
+`Project-1/Brain-Tasks-App` inside `guvi_tasks`), `SOURCE_DIR` in `.env`
+tells both buildspecs which subdirectory to work from.
+
+**Manual test of the build project alone:**
+```bash
+aws codebuild start-build --project-name $CODEBUILD_BUILD_PROJECT --region $AWS_REGION
+```
+Watch progress in CloudWatch Logs group `$CLOUDWATCH_LOG_GROUP`.
+
+## 5. GitHub connection (one manual step - cannot be scripted)
+
+AWS Console -> **Developer Tools -> Settings -> Connections** ->
+**Create connection** -> GitHub -> authorize the AWS Connector app for
+your repo -> wait for status **Available** -> copy the connection ARN
+into `CODESTAR_CONNECTION_ARN` in `.env`.
+
+This is a one-time OAuth handshake; AWS does not expose a CLI way to
+grant GitHub access non-interactively.
+
+## 6. CodePipeline
+
+```bash
+chmod +x codepipeline-setup.sh && ./codepipeline-setup.sh
+```
+
+Creates `$CODEPIPELINE_NAME` with three stages:
+1. **Source** - `CodeStarSourceConnection` action, pulls `$GITHUB_BRANCH`
+   from `$GITHUB_REPO_URL` via the connection from step 5.
+2. **Build** - invokes `$CODEBUILD_BUILD_PROJECT`.
+3. **Deploy** - invokes `$CODEBUILD_DEPLOY_PROJECT` with the Build
+   stage's output artifact as input.
+
+> **Why a second CodeBuild project instead of CodeDeploy/`appspec.yml`?**
+> AWS CodeDeploy only supports EC2/On-Premises, Lambda, and ECS as
+> deployment targets - **not EKS**. A CodePipeline "Deploy to EKS via
+> CodeDeploy" stage, as the assignment brief describes it, isn't something
+> AWS actually offers. The documented, working pattern is a CodeBuild
+> project that runs `kubectl apply` as the Deploy action, which is what
+> `buildspec-deploy.yml` + this pipeline do. `appspec.yml` and
+> `scripts/*.sh` are kept in the repo only as a reference for what each
+> deploy step conceptually does; they are not invoked by anything.
+
+Trigger a run:
+```bash
+aws codepipeline start-pipeline-execution --name $CODEPIPELINE_NAME --region $AWS_REGION
+```
+
+Any push to `$GITHUB_BRANCH` on `$GITHUB_REPO_URL` will also trigger it
+automatically from then on.
+
+## 7. Verify
+
+```bash
+kubectl get pods -n $K8S_NAMESPACE -l app=$APP_NAME
+kubectl get service ${APP_NAME}-service -n $K8S_NAMESPACE
+kubectl get service ${APP_NAME}-service -n $K8S_NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+```
+
+The LoadBalancer hostname is a DNS name, not an ARN - to get the actual
+ARN (needed for submission), match it against ELBv2:
+```bash
+aws elbv2 describe-load-balancers --region $AWS_REGION \
+  --query "LoadBalancers[?contains(DNSName, '<hostname-prefix-from-above>')].LoadBalancerArn" --output text
+```
+
+## 8. Monitoring (CloudWatch)
+
+- CodeBuild logs: CloudWatch Logs group `$CLOUDWATCH_LOG_GROUP` (build
+  and deploy projects both log here - filter by log stream/project name).
+- Application/pod logs: `kubectl logs -n $K8S_NAMESPACE -l app=$APP_NAME -f`
+  (add a CloudWatch Container Insights / Fluent Bit DaemonSet if you also
+  want pod logs to land in CloudWatch Logs, not just `kubectl logs`).
+
+## Manual/local Kubernetes deploy (alternative to the pipeline)
+
+```bash
+chmod +x k8s/deploy.sh && ./k8s/deploy.sh
+```
+
+Does the same render -> apply -> wait -> print-LB-URL sequence as
+`buildspec-deploy.yml`, but from your machine, useful for testing before
+wiring up the full pipeline.
+
+## Teardown (avoid ongoing charges)
+
+```bash
+kubectl delete -f k8s/rendered/service.yaml
+aws eks delete-nodegroup --cluster-name $EKS_CLUSTER_NAME --nodegroup-name $EKS_NODE_GROUP_NAME --region $AWS_REGION
+aws eks wait nodegroup-deleted --cluster-name $EKS_CLUSTER_NAME --nodegroup-name $EKS_NODE_GROUP_NAME --region $AWS_REGION
+aws eks delete-cluster --name $EKS_CLUSTER_NAME --region $AWS_REGION
+aws codepipeline delete-pipeline --name $CODEPIPELINE_NAME --region $AWS_REGION
+aws codebuild delete-project --name $CODEBUILD_BUILD_PROJECT --region $AWS_REGION
+aws codebuild delete-project --name $CODEBUILD_DEPLOY_PROJECT --region $AWS_REGION
+aws ecr delete-repository --repository-name $ECR_REPOSITORY_NAME --region $AWS_REGION --force
+```
+
+EKS control plane (~$0.10/hr) and the EC2 worker nodes are the main
+ongoing costs - delete the node group and cluster as soon as you're done
+verifying, if this is just for assessment purposes.

@@ -1,20 +1,12 @@
-version: 0.0
-os: linux
-
-hooks:
-  BeforeInstall:
-    - location: scripts/before_install.sh
-      timeout: 300
-      runas: root
-  AfterInstall:
-    - location: scripts/after_install.sh
-      timeout: 600
-      runas: root
-  ApplicationStart:
-    - location: scripts/start_application.sh
-      timeout: 300
-      runas: root
-  ValidateService:
-    - location: scripts/validate_service.sh
-      timeout: 300
-      runas: root
+# DEPRECATED - not used.
+#
+# AWS CodeDeploy does not support Amazon EKS as a deployment compute
+# platform (only EC2/On-Premises, Lambda, and ECS), so appspec.yml +
+# the CodeDeploy lifecycle hooks in scripts/ could never actually
+# deploy this app to EKS.
+#
+# The pipeline's Deploy stage now runs buildspec-deploy.yml as a second
+# CodeBuild project instead (see codebuild-setup.sh and
+# codepipeline-setup.sh). scripts/*.sh are kept only as a reference for
+# what each deploy step does; buildspec-deploy.yml is the real
+# implementation.

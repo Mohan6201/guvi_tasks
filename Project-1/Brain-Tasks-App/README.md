@@ -1,6 +1,6 @@
 # Brain Tasks App - Production Deployment
 
-A modern React task management application deployed on AWS EKS with full CI/CD pipeline using AWS CodePipeline, CodeBuild, and CodeDeploy.
+A modern React task management application deployed on AWS EKS with a full CI/CD pipeline using AWS CodePipeline and CodeBuild (build + deploy stages). Every AWS resource name/setting is centralized in one `.env` file - see **[DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)** for the full step-by-step setup.
 
 ## 🚀 Application Overview
 
@@ -20,7 +20,7 @@ The Brain Tasks App is a responsive task management application built with React
 - **Styling**: CSS3 with modern design
 - **Containerization**: Docker with nginx
 - **Orchestration**: Kubernetes (EKS)
-- **CI/CD**: AWS CodePipeline, CodeBuild, CodeDeploy
+- **CI/CD**: AWS CodePipeline, CodeBuild (Build stage + Deploy stage)
 - **Container Registry**: AWS ECR
 - **Load Balancer**: AWS Application Load Balancer
 
@@ -93,64 +93,52 @@ The Brain Tasks App is a responsive task management application built with React
 
 ## ☁️ AWS Deployment
 
-### 1. ECR Setup
-```bash
-# Make the script executable
-chmod +x ecr-setup.sh
+Everything is driven by `.env` (`cp .env.example .env`, fill in values).
+Full walkthrough with explanations: **[DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)**.
 
-# Run the ECR setup script
-./ecr-setup.sh
+```bash
+./iam-setup.sh          # 1. IAM roles for EKS/CodeBuild/CodePipeline
+./ecr-setup.sh           # 2. ECR repository
+./eks-setup.sh           # 3. EKS cluster + node group
+./codebuild-setup.sh     # 4. CodeBuild build + deploy projects
+# 5. one-time manual step: create a GitHub connection in the console,
+#    paste its ARN into CODESTAR_CONNECTION_ARN in .env
+./codepipeline-setup.sh  # 6. Source -> Build -> Deploy pipeline
 ```
 
-### 2. EKS Cluster Setup
+Manual/local Kubernetes deploy (no pipeline needed):
 ```bash
-# Make the script executable
-chmod +x eks-setup.sh
-
-# Run the EKS setup script
-./eks-setup.sh
-```
-
-### 3. Manual Kubernetes Deployment
-```bash
-# Apply namespace
-kubectl apply -f k8s/namespace.yaml
-
-# Apply deployment
-kubectl apply -f k8s/deployment.yaml
-
-# Apply service
-kubectl apply -f k8s/service.yaml
-
-# Check deployment status
-kubectl get pods -n brain-tasks
-kubectl get services -n brain-tasks
+./k8s/deploy.sh
 ```
 
 ## 🔄 CI/CD Pipeline
 
 ### Pipeline Stages
 
-1. **Source**: GitHub repository
-2. **Build**: AWS CodeBuild
-   - Builds Docker image
-   - Pushes to ECR
-   - Creates deployment artifacts
-3. **Deploy**: AWS CodeDeploy
-   - Deploys to EKS cluster
-   - Runs validation checks
+1. **Source**: GitHub, via a CodeStar Connection
+2. **Build**: AWS CodeBuild (`buildspec.yml`) - builds the Docker image
+   and pushes it to ECR
+3. **Deploy**: AWS CodeBuild (`buildspec-deploy.yml`) - renders the k8s
+   manifests with the built image, `kubectl apply`s them to EKS, waits
+   for rollout, prints the LoadBalancer URL
+
+> CodeDeploy does not support EKS as a deployment target, so the Deploy
+> stage is a second CodeBuild project rather than CodeDeploy/`appspec.yml`
+> (kept in the repo only as a reference, not invoked). See
+> DEPLOYMENT_GUIDE.md for details.
 
 ### Build Process (buildspec.yml)
-- **Install Phase**: Installs Docker and AWS CLI
+- **Install Phase**: Verifies Docker/AWS CLI (already on the managed image)
 - **Pre-build Phase**: Logs into ECR
-- **Build Phase**: Builds and tags Docker image
-- **Post-build Phase**: Pushes image to ECR and creates artifacts
+- **Build Phase**: `npm run build`, then builds and tags the Docker image
+- **Post-build Phase**: Pushes image to ECR, writes `image-uri.txt` /
+  `imagedefinitions.json` artifacts for the Deploy stage
 
-### Deployment Process (appspec.yml)
-- **BeforeInstall**: Sets up EKS namespace and secrets
-- **AfterInstall**: Applies Kubernetes manifests
-- **ApplicationStart**: Scales deployment and shows load balancer URL
-- **ValidateService**: Validates deployment health
+### Deploy Process (buildspec-deploy.yml)
+- Installs `kubectl`, points it at the EKS cluster from `.env`
+- Renders `k8s/*.yaml` templates with the real image URI (`k8s/render.sh`)
+- Refreshes the ECR pull secret, applies namespace/deployment/service
+- Waits for rollout, prints the LoadBalancer hostname
 
 ## 📁 Project Structure
 
@@ -161,25 +149,34 @@ Brain-Tasks-App/
 │   ├── App.css            # Application styles
 │   ├── main.jsx           # Application entry point
 │   └── index.css          # Global styles
-├── k8s/                    # Kubernetes manifests
-│   ├── namespace.yaml     # Kubernetes namespace
-│   ├── deployment.yaml    # Application deployment
-│   ├── service.yaml       # Load balancer service
-│   └── ecr-secret.yaml    # ECR registry secret
-├── scripts/                # CodeDeploy hooks
-│   ├── before_install.sh   # Pre-installation script
-│   ├── after_install.sh    # Post-installation script
-│   ├── start_application.sh # Application startup script
-│   └── validate_service.sh # Service validation script
+├── k8s/                    # Kubernetes manifests (${VAR} templates)
+│   ├── namespace.yaml     # Namespace template
+│   ├── deployment.yaml    # Deployment template
+│   ├── service.yaml       # LoadBalancer service template
+│   ├── render.sh          # Renders templates from .env -> k8s/rendered/
+│   ├── deploy.sh          # Manual local deploy (render + apply + wait)
+│   └── ecr-secret.yaml    # Deprecated - secret now created imperatively
+├── scripts/                # Reference only (see appspec.yml note below)
+│   ├── before_install.sh
+│   ├── after_install.sh
+│   ├── start_application.sh
+│   └── validate_service.sh
 ├── dist/                   # Production build output
-├── Dockerfile             # Docker configuration
-├── package.json           # Node.js dependencies
-├── vite.config.js         # Vite configuration
-├── buildspec.yml          # CodeBuild configuration
-├── appspec.yml            # CodeDeploy configuration
-├── ecr-setup.sh           # ECR setup script
-├── eks-setup.sh           # EKS setup script
-└── README.md              # This file
+├── .env.example            # Config template - copy to .env and fill in
+├── .env                    # Real config (gitignored)
+├── Dockerfile              # Docker configuration
+├── package.json            # Node.js dependencies
+├── vite.config.js          # Vite configuration
+├── buildspec.yml           # CodeBuild: build image, push to ECR
+├── buildspec-deploy.yml    # CodeBuild: kubectl apply to EKS
+├── appspec.yml             # Deprecated - CodeDeploy doesn't support EKS
+├── iam-setup.sh            # Step 1: IAM roles
+├── ecr-setup.sh            # Step 2: ECR repository
+├── eks-setup.sh            # Step 3: EKS cluster + node group
+├── codebuild-setup.sh      # Step 4: CodeBuild projects
+├── codepipeline-setup.sh   # Step 6: CodePipeline
+├── DEPLOYMENT_GUIDE.md     # Full step-by-step guide
+└── README.md               # This file
 ```
 
 ## 🔧 Configuration Files
@@ -195,10 +192,10 @@ Brain-Tasks-App/
 - ECR integration
 - Artifact generation
 
-### appspec.yml
-- AWS CodeDeploy configuration
-- Deployment hooks for EKS
-- Service validation
+### appspec.yml (deprecated)
+- CodeDeploy does not support EKS as a deployment platform, so this file
+  is not used by the pipeline - kept only as a reference for the deploy
+  steps, which are actually implemented in `buildspec-deploy.yml`
 
 ## 📊 Monitoring and Logging
 
@@ -317,4 +314,4 @@ For issues and questions:
 
 ---
 
-**Note**: Replace `123456789012` in `k8s/deployment.yaml` with your actual AWS account ID before deployment.
+**Note**: `k8s/deployment.yaml` / `service.yaml` / `namespace.yaml` are `${VAR}` templates - values come from `.env` via `k8s/render.sh`, nothing to hand-edit.

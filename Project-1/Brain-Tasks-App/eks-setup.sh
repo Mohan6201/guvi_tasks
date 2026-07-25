@@ -1,55 +1,111 @@
 #!/bin/bash
+# ============================================================
+# EKS Cluster Setup - creates the cluster + managed node group.
+# Requires iam-setup.sh to have been run first (needs
+# EKSClusterRole / EKSNodeRole to exist).
+#
+# Uses EKS "access entries" (authenticationMode=API_AND_CONFIG_MAP)
+# so the node role and your own IAM identity get cluster access
+# without hand-editing the aws-auth ConfigMap.
+# ============================================================
+set -e
 
-# AWS EKS Cluster Setup Script
-# Make sure AWS CLI and kubectl are configured with appropriate permissions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ ! -f "$SCRIPT_DIR/.env" ]; then
+  echo "ERROR: .env not found. Run: cp .env.example .env   (then fill in values)" >&2
+  exit 1
+fi
+set -a
+source "$SCRIPT_DIR/.env"
+set +a
 
-# Variables
-CLUSTER_NAME="brain-tasks-cluster"
-REGION="us-east-1"
-NODE_GROUP_NAME="brain-tasks-nodes"
-NODE_TYPE="t3.medium"
-DESIRED_NODES=2
-MIN_NODES=1
-MAX_NODES=3
+echo "== EKS setup: cluster '${EKS_CLUSTER_NAME}' in ${AWS_REGION} =="
 
-echo "Setting up EKS cluster: ${CLUSTER_NAME}..."
+CLUSTER_ROLE_ARN=$(aws iam get-role --role-name "$EKS_CLUSTER_ROLE_NAME" --query Role.Arn --output text)
+NODE_ROLE_ARN=$(aws iam get-role --role-name "$EKS_NODE_ROLE_NAME" --query Role.Arn --output text)
+CALLER_ARN=$(aws sts get-caller-identity --query Arn --output text)
 
-# Create EKS cluster
-aws eks create-cluster \
-    --name ${CLUSTER_NAME} \
-    --region ${REGION} \
-    --kubernetes-version 1.29 \
-    --role-arn arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):role/EKSClusterRole \
-    --resources-vpc-config subnetIds=$(aws ec2 describe-subnets --filters Name=tag:Name,Values=*subnet* --query 'Subnets[0:2].SubnetId' --output text | tr '\t' ','),securityGroupIds=$(aws ec2 describe-security-groups --filters Name=group-name,Values=*default* --query 'SecurityGroups[0].GroupId' --output text) \
-    || echo "Cluster may already exist or needs VPC configuration"
+# Default VPC subnets (2 AZs) - fine for a lab/assessment cluster.
+SUBNET_IDS=$(aws ec2 describe-subnets \
+  --filters Name=default-for-az,Values=true \
+  --query 'Subnets[0:2].SubnetId' --output text --region "$AWS_REGION" | tr '\t' ',')
+SECURITY_GROUP_ID=$(aws ec2 describe-security-groups \
+  --filters Name=group-name,Values=default \
+  --query 'SecurityGroups[0].GroupId' --output text --region "$AWS_REGION")
 
-# Wait for cluster to be active
-echo "Waiting for cluster to become active..."
-aws eks wait cluster-active --name ${CLUSTER_NAME} --region ${REGION}
+if [ -z "$SUBNET_IDS" ] || [ "$SUBNET_IDS" == "None" ]; then
+  echo "ERROR: could not find default subnets in ${AWS_REGION}. Pass explicit subnet IDs instead." >&2
+  exit 1
+fi
 
-# Create node group
-aws eks create-nodegroup \
-    --cluster-name ${CLUSTER_NAME} \
-    --nodegroup-name ${NODE_GROUP_NAME} \
-    --region ${REGION} \
-    --scaling-config desiredSize=${DESIRED_NODES},minSize=${MIN_NODES},maxSize=${MAX_NODES} \
-    --subnets $(aws ec2 describe-subnets --filters Name=tag:Name,Values=*subnet* --query 'Subnets[0:2].SubnetId' --output text | tr '\t' ',') \
-    --instance-types ${NODE_TYPE} \
+echo "Cluster role: $CLUSTER_ROLE_ARN"
+echo "Subnets:      $SUBNET_IDS"
+echo "Security grp: $SECURITY_GROUP_ID"
+
+if aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+  echo "Cluster $EKS_CLUSTER_NAME already exists, skipping creation."
+else
+  echo "Creating EKS cluster (this takes ~10-15 minutes)..."
+  aws eks create-cluster \
+    --name "$EKS_CLUSTER_NAME" \
+    --region "$AWS_REGION" \
+    --kubernetes-version "$EKS_K8S_VERSION" \
+    --role-arn "$CLUSTER_ROLE_ARN" \
+    --resources-vpc-config subnetIds="$SUBNET_IDS",securityGroupIds="$SECURITY_GROUP_ID" \
+    --access-config authenticationMode=API_AND_CONFIG_MAP
+
+  echo "Waiting for cluster to become ACTIVE..."
+  aws eks wait cluster-active --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
+fi
+
+echo "Updating local kubeconfig..."
+aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
+
+echo "Granting your IAM identity cluster-admin access via an EKS access entry..."
+aws eks create-access-entry \
+  --cluster-name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" \
+  --principal-arn "$CALLER_ARN" --type STANDARD >/dev/null 2>&1 || true
+aws eks associate-access-policy \
+  --cluster-name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" \
+  --principal-arn "$CALLER_ARN" \
+  --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
+  --access-scope type=cluster >/dev/null 2>&1 || true
+
+echo "Granting the CodeBuild deploy role cluster access too..."
+CODEBUILD_ROLE_ARN=$(aws iam get-role --role-name "$CODEBUILD_SERVICE_ROLE_NAME" --query Role.Arn --output text 2>/dev/null || echo "")
+if [ -n "$CODEBUILD_ROLE_ARN" ]; then
+  aws eks create-access-entry \
+    --cluster-name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" \
+    --principal-arn "$CODEBUILD_ROLE_ARN" --type STANDARD >/dev/null 2>&1 || true
+  aws eks associate-access-policy \
+    --cluster-name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" \
+    --principal-arn "$CODEBUILD_ROLE_ARN" \
+    --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
+    --access-scope type=cluster >/dev/null 2>&1 || true
+fi
+
+if aws eks describe-nodegroup --cluster-name "$EKS_CLUSTER_NAME" --nodegroup-name "$EKS_NODE_GROUP_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+  echo "Node group $EKS_NODE_GROUP_NAME already exists, skipping creation."
+else
+  echo "Creating managed node group (this takes ~5-10 minutes)..."
+  aws eks create-nodegroup \
+    --cluster-name "$EKS_CLUSTER_NAME" \
+    --nodegroup-name "$EKS_NODE_GROUP_NAME" \
+    --region "$AWS_REGION" \
+    --scaling-config desiredSize="$EKS_DESIRED_NODES",minSize="$EKS_MIN_NODES",maxSize="$EKS_MAX_NODES" \
+    --subnets $(echo "$SUBNET_IDS" | tr ',' ' ') \
+    --instance-types "$EKS_NODE_TYPE" \
     --ami-type AL2_x86_64 \
-    --node-role arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):role/EKSNodeRole \
-    || echo "Node group may already exist"
+    --node-role "$NODE_ROLE_ARN"
 
-# Wait for node group to be active
-echo "Waiting for node group to become active..."
-aws eks wait nodegroup-active --cluster-name ${CLUSTER_NAME} --nodegroup-name ${NODE_GROUP_NAME} --region ${REGION}
+  echo "Waiting for node group to become ACTIVE..."
+  aws eks wait nodegroup-active --cluster-name "$EKS_CLUSTER_NAME" --nodegroup-name "$EKS_NODE_GROUP_NAME" --region "$AWS_REGION"
+fi
 
-# Update kubeconfig
-aws eks update-kubeconfig --region ${REGION} --name ${CLUSTER_NAME}
-
-# Verify cluster is running
+echo ""
+echo "== EKS cluster verification =="
 kubectl get nodes
-kubectl get services
+kubectl cluster-info
 
-echo "EKS cluster setup complete!"
-echo "Cluster name: ${CLUSTER_NAME}"
-echo "Region: ${REGION}"
+echo ""
+echo "EKS setup complete. Cluster: $EKS_CLUSTER_NAME  Region: $AWS_REGION"
