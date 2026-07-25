@@ -60,7 +60,7 @@ echo ""
 
 create_or_update_project() {
   local project_name=$1
-  local buildspec_file=$2
+  local buildspec_path=$2
   local privileged=$3
 
   if aws codebuild batch-get-projects --names "$project_name" --region "$AWS_REGION" \
@@ -68,7 +68,7 @@ create_or_update_project() {
     echo "-> Project $project_name exists, updating..."
     aws codebuild update-project \
       --name "$project_name" \
-      --source type=GITHUB,location="${GITHUB_REPO_URL}",buildspec="${SOURCE_DIR:+$SOURCE_DIR/}${buildspec_file}",gitCloneDepth=1 \
+      --source type=GITHUB,location="${GITHUB_REPO_URL}",buildspec="${buildspec_path}",gitCloneDepth=1 \
       --source-version "$GITHUB_BRANCH" \
       --artifacts type=NO_ARTIFACTS \
       --environment type=LINUX_CONTAINER,image="${CODEBUILD_IMAGE}",computeType=BUILD_GENERAL1_SMALL,privilegedMode=${privileged},environmentVariables="${ENV_VARS_JSON}" \
@@ -78,7 +78,7 @@ create_or_update_project() {
     echo "-> Creating project $project_name..."
     aws codebuild create-project \
       --name "$project_name" \
-      --source type=GITHUB,location="${GITHUB_REPO_URL}",buildspec="${SOURCE_DIR:+$SOURCE_DIR/}${buildspec_file}",gitCloneDepth=1 \
+      --source type=GITHUB,location="${GITHUB_REPO_URL}",buildspec="${buildspec_path}",gitCloneDepth=1 \
       --source-version "$GITHUB_BRANCH" \
       --artifacts type=NO_ARTIFACTS \
       --environment type=LINUX_CONTAINER,image="${CODEBUILD_IMAGE}",computeType=BUILD_GENERAL1_SMALL,privilegedMode=${privileged},environmentVariables="${ENV_VARS_JSON}" \
@@ -90,9 +90,16 @@ create_or_update_project() {
   echo "   done."
 }
 
+# Build project reads raw GitHub source (full repo checkout), so its
+# buildspec path needs the monorepo prefix.
 echo "== Creating/updating build project (privileged=true for docker build) =="
-create_or_update_project "$CODEBUILD_BUILD_PROJECT" "buildspec.yml" "true"
+create_or_update_project "$CODEBUILD_BUILD_PROJECT" "${SOURCE_DIR:+$SOURCE_DIR/}buildspec.yml" "true"
 
+# Deploy project is only ever invoked by CodePipeline against the Build
+# stage's output artifact, whose contents are already flattened to the
+# Brain-Tasks-App root (see buildspec.yml's `base-directory`) - so no
+# SOURCE_DIR prefix here, otherwise CodeBuild looks in the wrong place
+# and DOWNLOAD_SOURCE fails with "no such file or directory".
 echo "== Creating/updating deploy project (kubectl apply to EKS) =="
 create_or_update_project "$CODEBUILD_DEPLOY_PROJECT" "buildspec-deploy.yml" "false"
 

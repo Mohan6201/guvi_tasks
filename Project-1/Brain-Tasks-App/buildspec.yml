@@ -69,5 +69,6 @@ artifacts:
   files:
     - image-uri.txt
     - imagedefinitions.json
+    - buildspec-deploy.yml
     - k8s/**/*
   base-directory: "$CODEBUILD_SRC_DIR/$SOURCE_DIR"
