@@ -9,6 +9,8 @@
 # Idempotent: safe to re-run, existing roles/attachments are skipped.
 # ============================================================
 set -e
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL="*"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ ! -f "$SCRIPT_DIR/.env" ]; then

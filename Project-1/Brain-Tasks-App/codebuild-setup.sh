@@ -15,6 +15,12 @@
 # ============================================================
 set -e
 
+# Git Bash (MSYS) rewrites any "/"-leading argument (like our CloudWatch
+# log group name /aws/codebuild/...) into a Windows path before it
+# reaches aws.exe. Disable that translation for this script's commands.
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL="*"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ ! -f "$SCRIPT_DIR/.env" ]; then
   echo "ERROR: .env not found. Run: cp .env.example .env   (then fill in values)" >&2
@@ -28,7 +34,20 @@ SERVICE_ROLE_ARN=$(aws iam get-role --role-name "$CODEBUILD_SERVICE_ROLE_NAME" -
 
 # Build the --environment-variables JSON array from .env values that the
 # buildspecs actually need at runtime.
-ENV_VARS_JSON="[{name=AWS_REGION,value=${AWS_REGION}},{name=AWS_ACCOUNT_ID,value=${AWS_ACCOUNT_ID}},{name=APP_NAME,value=${APP_NAME}},{name=CONTAINER_PORT,value=${CONTAINER_PORT}},{name=ECR_REPOSITORY_NAME,value=${ECR_REPOSITORY_NAME}},{name=IMAGE_TAG,value=${IMAGE_TAG}},{name=EKS_CLUSTER_NAME,value=${EKS_CLUSTER_NAME}},{name=K8S_NAMESPACE,value=${K8S_NAMESPACE}},{name=SOURCE_DIR,value=${SOURCE_DIR}}]"
+ENV_VARS_JSON=$(cat <<EOF
+[
+  {"name":"AWS_REGION","value":"${AWS_REGION}"},
+  {"name":"AWS_ACCOUNT_ID","value":"${AWS_ACCOUNT_ID}"},
+  {"name":"APP_NAME","value":"${APP_NAME}"},
+  {"name":"CONTAINER_PORT","value":"${CONTAINER_PORT}"},
+  {"name":"ECR_REPOSITORY_NAME","value":"${ECR_REPOSITORY_NAME}"},
+  {"name":"IMAGE_TAG","value":"${IMAGE_TAG}"},
+  {"name":"EKS_CLUSTER_NAME","value":"${EKS_CLUSTER_NAME}"},
+  {"name":"K8S_NAMESPACE","value":"${K8S_NAMESPACE}"},
+  {"name":"SOURCE_DIR","value":"${SOURCE_DIR}"}
+]
+EOF
+)
 
 echo "== Note: standalone GitHub source needs a one-time token import =="
 echo "If this project will pull directly from GitHub (outside of CodePipeline),"

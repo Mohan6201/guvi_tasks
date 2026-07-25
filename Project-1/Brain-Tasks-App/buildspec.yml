@@ -17,7 +17,7 @@ phases:
         set -e
         echo "Verifying tooling (managed image already has docker + aws cli)..."
         aws --version
-        docker --versions
+        docker --version
 
   pre_build:
     commands:
