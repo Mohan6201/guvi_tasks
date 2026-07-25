@@ -1,6 +1,27 @@
 # Brain Tasks App - Production Deployment
 
-A modern React task management application deployed on AWS EKS with a full CI/CD pipeline using AWS CodePipeline and CodeBuild (build + deploy stages). Every AWS resource name/setting is centralized in one `.env` file - see **[DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)** for the full step-by-step setup.
+A React task management application deployed on AWS EKS with a full CI/CD pipeline: **GitHub → CodePipeline → CodeBuild (build) → CodeBuild (deploy) → EKS**. Every AWS resource name/setting is centralized in one `.env` file - see **[DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)** for the full step-by-step setup.
+
+## ✅ Live Deployment (verified)
+
+The pipeline has been run end-to-end and the app is live and responding.
+
+| | |
+|---|---|
+| **App URL** | http://aec0476e2c4434817b96dbde314cfb8a-1180093499.us-east-1.elb.amazonaws.com |
+| **Load Balancer ARN** | `arn:aws:elasticloadbalancing:us-east-1:074925547344:loadbalancer/aec0476e2c4434817b96dbde314cfb8a` |
+| **Load Balancer type** | Classic Load Balancer (default for a plain `type: LoadBalancer` Service on EKS - no AWS Load Balancer Controller installed) |
+| **HTTP check** | `200 OK`, serving the built React app |
+| **EKS cluster** | `brain-tasks-cluster` (us-east-1), nodes `Ready` |
+| **Pods** | 3/3 `Running`, rollout complete |
+| **Pipeline stages** | Source ✅ Build ✅ Deploy ✅ (all `Succeeded`) |
+
+Verify it yourself:
+```bash
+kubectl get pods -n brain-tasks -l app=brain-tasks-app
+kubectl get service brain-tasks-app-service -n brain-tasks
+curl -I http://aec0476e2c4434817b96dbde314cfb8a-1180093499.us-east-1.elb.amazonaws.com/
+```
 
 ## 🚀 Application Overview
 
@@ -22,12 +43,12 @@ The Brain Tasks App is a responsive task management application built with React
 - **Orchestration**: Kubernetes (EKS)
 - **CI/CD**: AWS CodePipeline, CodeBuild (Build stage + Deploy stage)
 - **Container Registry**: AWS ECR
-- **Load Balancer**: AWS Application Load Balancer
+- **Load Balancer**: Classic Load Balancer (Kubernetes `Service` of `type: LoadBalancer`)
 
 ### Infrastructure
-- **EKS Cluster**: brain-tasks-cluster (us-east-1)
-- **Node Group**: t3.medium instances (1-3 nodes)
-- **Namespace**: brain-tasks
+- **EKS Cluster**: `brain-tasks-cluster` (us-east-1)
+- **Node Group**: `brain-tasks-nodes`, t3.medium instances (min 1 / desired 2 / max 3)
+- **Namespace**: `brain-tasks`
 - **Service Type**: LoadBalancer
 - **Replicas**: 3 pods for high availability
 
@@ -42,18 +63,14 @@ The Brain Tasks App is a responsive task management application built with React
 ### AWS Deployment
 - AWS CLI configured with appropriate permissions
 - kubectl
-- AWS IAM permissions for:
-  - ECR (Elastic Container Registry)
-  - EKS (Elastic Kubernetes Service)
-  - CodeBuild, CodeDeploy, CodePipeline
-  - IAM roles for EKS cluster and nodes
+- AWS IAM permissions for: ECR, EKS, CodeBuild, CodePipeline, IAM (to create the roles the scripts need)
 
 ## 🛠️ Local Development Setup
 
 1. **Clone the repository**
    ```bash
-   git clone <repository-url>
-   cd Brain-Tasks-App
+   git clone https://github.com/Mohan6201/guvi_tasks.git
+   cd guvi_tasks/Project-1/Brain-Tasks-App
    ```
 
 2. **Install dependencies**
@@ -93,8 +110,7 @@ The Brain Tasks App is a responsive task management application built with React
 
 ## ☁️ AWS Deployment
 
-Everything is driven by `.env` (`cp .env.example .env`, fill in values).
-Full walkthrough with explanations: **[DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)**.
+Everything is driven by `.env` (`cp .env.example .env`, fill in values). This is exactly the sequence that produced the live deployment above.
 
 ```bash
 ./iam-setup.sh          # 1. IAM roles for EKS/CodeBuild/CodePipeline
@@ -104,7 +120,10 @@ Full walkthrough with explanations: **[DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.m
 # 5. one-time manual step: create a GitHub connection in the console,
 #    paste its ARN into CODESTAR_CONNECTION_ARN in .env
 ./codepipeline-setup.sh  # 6. Source -> Build -> Deploy pipeline
+aws codepipeline start-pipeline-execution --name brain-tasks-app-pipeline --region us-east-1
 ```
+
+Full walkthrough with explanations: **[DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)**.
 
 Manual/local Kubernetes deploy (no pipeline needed):
 ```bash
@@ -113,14 +132,11 @@ Manual/local Kubernetes deploy (no pipeline needed):
 
 ## 🔄 CI/CD Pipeline
 
-### Pipeline Stages
+### Pipeline Stages (`brain-tasks-app-pipeline`)
 
-1. **Source**: GitHub, via a CodeStar Connection
-2. **Build**: AWS CodeBuild (`buildspec.yml`) - builds the Docker image
-   and pushes it to ECR
-3. **Deploy**: AWS CodeBuild (`buildspec-deploy.yml`) - renders the k8s
-   manifests with the built image, `kubectl apply`s them to EKS, waits
-   for rollout, prints the LoadBalancer URL
+1. **Source**: GitHub (`Mohan6201/guvi_tasks`, branch `main`), via a CodeStar Connection
+2. **Build**: AWS CodeBuild project `brain-tasks-app-build` (`buildspec.yml`) - builds the Docker image and pushes it to ECR
+3. **Deploy**: AWS CodeBuild project `brain-tasks-app-deploy` (`buildspec-deploy.yml`) - renders the k8s manifests with the built image, `kubectl apply`s them to EKS, waits for rollout, prints the LoadBalancer URL
 
 > CodeDeploy does not support EKS as a deployment target, so the Deploy
 > stage is a second CodeBuild project rather than CodeDeploy/`appspec.yml`
@@ -131,8 +147,7 @@ Manual/local Kubernetes deploy (no pipeline needed):
 - **Install Phase**: Verifies Docker/AWS CLI (already on the managed image)
 - **Pre-build Phase**: Logs into ECR
 - **Build Phase**: `npm run build`, then builds and tags the Docker image
-- **Post-build Phase**: Pushes image to ECR, writes `image-uri.txt` /
-  `imagedefinitions.json` artifacts for the Deploy stage
+- **Post-build Phase**: Pushes image to ECR, writes `image-uri.txt` / `imagedefinitions.json` / `buildspec-deploy.yml` as artifacts for the Deploy stage
 
 ### Deploy Process (buildspec-deploy.yml)
 - Installs `kubectl`, points it at the EKS cluster from `.env`
@@ -145,17 +160,17 @@ Manual/local Kubernetes deploy (no pipeline needed):
 ```
 Brain-Tasks-App/
 ├── src/                    # React source code
-│   ├── App.jsx            # Main application component
-│   ├── App.css            # Application styles
-│   ├── main.jsx           # Application entry point
-│   └── index.css          # Global styles
+│   ├── App.jsx             # Main application component
+│   ├── App.css             # Application styles
+│   ├── main.jsx            # Application entry point
+│   └── index.css           # Global styles
 ├── k8s/                    # Kubernetes manifests (${VAR} templates)
-│   ├── namespace.yaml     # Namespace template
-│   ├── deployment.yaml    # Deployment template
-│   ├── service.yaml       # LoadBalancer service template
-│   ├── render.sh          # Renders templates from .env -> k8s/rendered/
-│   ├── deploy.sh          # Manual local deploy (render + apply + wait)
-│   └── ecr-secret.yaml    # Deprecated - secret now created imperatively
+│   ├── namespace.yaml      # Namespace template
+│   ├── deployment.yaml     # Deployment template
+│   ├── service.yaml        # LoadBalancer service template
+│   ├── render.sh           # Renders templates from .env -> k8s/rendered/
+│   ├── deploy.sh           # Manual local deploy (render + apply + wait)
+│   └── ecr-secret.yaml     # Deprecated - secret now created imperatively
 ├── scripts/                # Reference only (see appspec.yml note below)
 │   ├── before_install.sh
 │   ├── after_install.sh
@@ -190,7 +205,7 @@ Brain-Tasks-App/
 - AWS CodeBuild configuration
 - Multi-stage build process
 - ECR integration
-- Artifact generation
+- Artifact generation (including `buildspec-deploy.yml` for the Deploy stage)
 
 ### appspec.yml (deprecated)
 - CodeDeploy does not support EKS as a deployment platform, so this file
@@ -200,9 +215,9 @@ Brain-Tasks-App/
 ## 📊 Monitoring and Logging
 
 ### CloudWatch Integration
-- Build logs in CodeBuild
-- Deployment logs in CodeDeploy
-- Application logs via CloudWatch agent (optional)
+- Build stage logs: CloudWatch Logs group `/aws/codebuild/brain-tasks-app` (stream per build, project `brain-tasks-app-build`)
+- Deploy stage logs: same log group, project `brain-tasks-app-deploy`
+- Application/pod logs: `kubectl logs` (see below); not shipped to CloudWatch unless Container Insights/Fluent Bit is added
 
 ### Kubernetes Monitoring
 ```bash
@@ -232,12 +247,17 @@ kubectl describe service brain-tasks-app-service -n brain-tasks
 3. **Load Balancer Not Accessible**
    - Check security group configuration
    - Verify service type is LoadBalancer
-   - Wait for LB provisioning (5-10 minutes)
+   - Wait for LB provisioning (a few minutes for DNS to propagate)
 
 4. **Pods Not Starting**
    - Check image pull policy and ECR credentials
    - Verify resource limits
    - Check node group capacity
+
+5. **CodeBuild `--environment` CLI parsing errors (Windows/Git Bash)**
+   - Two Windows-specific gotchas hit during setup, both already fixed in the scripts:
+     - Git Bash (MSYS) rewrites `/`-leading arguments (e.g. CloudWatch log group `/aws/codebuild/...`) into Windows paths - scripts now `export MSYS_NO_PATHCONV=1` internally.
+     - The AWS CLI's shorthand parser can't reliably parse a nested list-of-objects (`environmentVariables=[...]`) inside `--environment`; scripts now pass `--environment` as raw JSON instead of shorthand.
 
 ### Debug Commands
 ```bash
@@ -249,6 +269,10 @@ kubectl describe pods -n brain-tasks -l app=brain-tasks-app
 
 # Check events
 kubectl get events -n brain-tasks --sort-by=.metadata.creationTimestamp
+
+# Check pipeline/build status
+aws codepipeline get-pipeline-state --name brain-tasks-app-pipeline --region us-east-1
+aws codebuild list-builds-for-project --project-name brain-tasks-app-build --region us-east-1
 ```
 
 ## 📈 Performance Considerations
@@ -260,55 +284,34 @@ kubectl get events -n brain-tasks --sort-by=.metadata.creationTimestamp
 
 ### Scaling
 - Horizontal Pod Autoscaler can be added
-- Node group can scale from 1-3 nodes
+- Node group can scale from 1-3 nodes (currently running 2)
 - Load Balancer handles traffic distribution
 
 ## 🔒 Security
 
 - ECR repository with image scanning enabled
-- IAM roles for EKS cluster and nodes
+- IAM roles for EKS cluster, nodes, CodeBuild, and CodePipeline (least-privilege managed policies, created by `iam-setup.sh`)
+- AWS credentials never stored in `.env` or the repo - local scripts use the AWS CLI's configured identity, CodeBuild uses its IAM service role
 - Network policies (can be added)
-- Secrets management via Kubernetes secrets
-
-## 📝 Deployment Commands Summary
-
-```bash
-# 1. Local development
-npm install && npm run dev
-
-# 2. Docker build and test
-docker build -t brain-tasks-app:latest .
-docker run -d -p 8080:80 brain-tasks-app:latest
-
-# 3. AWS ECR setup
-./ecr-setup.sh
-
-# 4. AWS EKS setup
-./eks-setup.sh
-
-# 5. Deploy to Kubernetes
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/deployment.yaml
-kubectl apply -f k8s/service.yaml
-
-# 6. Check deployment
-kubectl get pods -n brain-tasks
-kubectl get services -n brain-tasks
-```
+- Secrets management via Kubernetes secrets (ECR pull secret refreshed on every deploy, since ECR tokens expire every 12h)
 
 ## 🎯 Load Balancer Access
 
-After successful deployment, the application will be accessible via the AWS Load Balancer URL:
-
 ```bash
 kubectl get service brain-tasks-app-service -n brain-tasks -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+```
+
+To get the Load Balancer ARN (needed for submission), match the hostname against the classic ELB API:
+```bash
+aws elb describe-load-balancers --region us-east-1 --query "LoadBalancerDescriptions[].LoadBalancerName" --output text
+# then: arn:aws:elasticloadbalancing:<region>:<account-id>:loadbalancer/<name>
 ```
 
 ## 📞 Support
 
 For issues and questions:
 1. Check the troubleshooting section
-2. Review CloudWatch logs
+2. Review CloudWatch logs (`/aws/codebuild/brain-tasks-app`)
 3. Verify AWS IAM permissions
 4. Check Kubernetes events and pod status
 
