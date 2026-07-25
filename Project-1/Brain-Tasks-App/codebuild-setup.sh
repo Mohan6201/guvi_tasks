@@ -32,22 +32,11 @@ set +a
 
 SERVICE_ROLE_ARN=$(aws iam get-role --role-name "$CODEBUILD_SERVICE_ROLE_NAME" --query Role.Arn --output text)
 
-# Build the --environment-variables JSON array from .env values that the
-# buildspecs actually need at runtime.
-ENV_VARS_JSON=$(cat <<EOF
-[
-  {"name":"AWS_REGION","value":"${AWS_REGION}"},
-  {"name":"AWS_ACCOUNT_ID","value":"${AWS_ACCOUNT_ID}"},
-  {"name":"APP_NAME","value":"${APP_NAME}"},
-  {"name":"CONTAINER_PORT","value":"${CONTAINER_PORT}"},
-  {"name":"ECR_REPOSITORY_NAME","value":"${ECR_REPOSITORY_NAME}"},
-  {"name":"IMAGE_TAG","value":"${IMAGE_TAG}"},
-  {"name":"EKS_CLUSTER_NAME","value":"${EKS_CLUSTER_NAME}"},
-  {"name":"K8S_NAMESPACE","value":"${K8S_NAMESPACE}"},
-  {"name":"SOURCE_DIR","value":"${SOURCE_DIR}"}
-]
-EOF
-)
+# Environment variables injected into both projects, as a JSON array
+# fragment reused inside the full --environment JSON built per-project
+# below (see create_or_update_project). Each entry needs an explicit
+# "type" - the API does not default it.
+ENV_VARS_JSON="[{\"name\":\"AWS_REGION\",\"value\":\"${AWS_REGION}\",\"type\":\"PLAINTEXT\"},{\"name\":\"AWS_ACCOUNT_ID\",\"value\":\"${AWS_ACCOUNT_ID}\",\"type\":\"PLAINTEXT\"},{\"name\":\"APP_NAME\",\"value\":\"${APP_NAME}\",\"type\":\"PLAINTEXT\"},{\"name\":\"CONTAINER_PORT\",\"value\":\"${CONTAINER_PORT}\",\"type\":\"PLAINTEXT\"},{\"name\":\"ECR_REPOSITORY_NAME\",\"value\":\"${ECR_REPOSITORY_NAME}\",\"type\":\"PLAINTEXT\"},{\"name\":\"IMAGE_TAG\",\"value\":\"${IMAGE_TAG}\",\"type\":\"PLAINTEXT\"},{\"name\":\"EKS_CLUSTER_NAME\",\"value\":\"${EKS_CLUSTER_NAME}\",\"type\":\"PLAINTEXT\"},{\"name\":\"K8S_NAMESPACE\",\"value\":\"${K8S_NAMESPACE}\",\"type\":\"PLAINTEXT\"},{\"name\":\"SOURCE_DIR\",\"value\":\"${SOURCE_DIR}\",\"type\":\"PLAINTEXT\"}]"
 
 echo "== Note: standalone GitHub source needs a one-time token import =="
 echo "If this project will pull directly from GitHub (outside of CodePipeline),"
@@ -63,6 +52,13 @@ create_or_update_project() {
   local buildspec_path=$2
   local privileged=$3
 
+  # Passed as pure JSON (starts with "{"), not CLI shorthand - the
+  # shorthand parser cannot reliably tell the JSON array's internal
+  # commas apart from its own top-level field separators once you nest
+  # a list-of-objects (environmentVariables) inside a structure
+  # (--environment). Raw JSON sidesteps that parser entirely.
+  local environment_json="{\"type\":\"LINUX_CONTAINER\",\"image\":\"${CODEBUILD_IMAGE}\",\"computeType\":\"BUILD_GENERAL1_SMALL\",\"privilegedMode\":${privileged},\"environmentVariables\":${ENV_VARS_JSON}}"
+
   if aws codebuild batch-get-projects --names "$project_name" --region "$AWS_REGION" \
       --query "projects[0].name" --output text 2>/dev/null | grep -q "$project_name"; then
     echo "-> Project $project_name exists, updating..."
@@ -71,7 +67,7 @@ create_or_update_project() {
       --source type=GITHUB,location="${GITHUB_REPO_URL}",buildspec="${buildspec_path}",gitCloneDepth=1 \
       --source-version "$GITHUB_BRANCH" \
       --artifacts type=NO_ARTIFACTS \
-      --environment type=LINUX_CONTAINER,image="${CODEBUILD_IMAGE}",computeType=BUILD_GENERAL1_SMALL,privilegedMode=${privileged},environmentVariables="${ENV_VARS_JSON}" \
+      --environment "$environment_json" \
       --service-role "$SERVICE_ROLE_ARN" \
       --region "$AWS_REGION" >/dev/null
   else
@@ -81,7 +77,7 @@ create_or_update_project() {
       --source type=GITHUB,location="${GITHUB_REPO_URL}",buildspec="${buildspec_path}",gitCloneDepth=1 \
       --source-version "$GITHUB_BRANCH" \
       --artifacts type=NO_ARTIFACTS \
-      --environment type=LINUX_CONTAINER,image="${CODEBUILD_IMAGE}",computeType=BUILD_GENERAL1_SMALL,privilegedMode=${privileged},environmentVariables="${ENV_VARS_JSON}" \
+      --environment "$environment_json" \
       --service-role "$SERVICE_ROLE_ARN" \
       --timeout-in-minutes 20 \
       --logs-config cloudWatchLogs="{status=ENABLED,groupName=${CLOUDWATCH_LOG_GROUP}}" \
