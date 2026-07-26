@@ -6,6 +6,10 @@ pipeline {
         DOCKERHUB_USERNAME  = "${DOCKERHUB_CREDS_USR}"
         DOCKERHUB_PASSWORD  = "${DOCKERHUB_CREDS_PSW}"
         IMAGE_TAG           = "${env.BUILD_NUMBER}"
+        // checkout scm pulls the whole guvi_tasks monorepo into the workspace root —
+        // the Script Path setting only tells Jenkins where to find this Jenkinsfile,
+        // it doesn't change cwd for the steps below, so every sh step must cd here.
+        APP_DIR             = "Project-3/devops-build"
     }
 
     stages {
@@ -31,33 +35,39 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                sh '''
-                    docker build -t ${TARGET_REPO}:${IMAGE_TAG} .
-                    docker tag ${TARGET_REPO}:${IMAGE_TAG} ${TARGET_REPO}:latest
-                '''
+                dir(APP_DIR) {
+                    sh '''
+                        docker build -t ${TARGET_REPO}:${IMAGE_TAG} .
+                        docker tag ${TARGET_REPO}:${IMAGE_TAG} ${TARGET_REPO}:latest
+                    '''
+                }
             }
         }
 
         stage('Push to DockerHub') {
             steps {
-                sh '''
-                    echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
-                    docker push ${TARGET_REPO}:${IMAGE_TAG}
-                    docker push ${TARGET_REPO}:latest
-                '''
+                dir(APP_DIR) {
+                    sh '''
+                        echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+                        docker push ${TARGET_REPO}:${IMAGE_TAG}
+                        docker push ${TARGET_REPO}:latest
+                    '''
+                }
             }
         }
 
         stage('Deploy') {
             steps {
-                withCredentials([
-                    sshUserPrivateKey(credentialsId: 'app-server-ssh-key', keyFileVariable: 'APP_SERVER_SSH_KEY_PATH', usernameVariable: 'APP_SERVER_SSH_USER'),
-                    string(credentialsId: 'app-server-host', variable: 'APP_SERVER_HOST')
-                ]) {
-                    sh '''
-                        chmod +x deploy.sh
-                        ./deploy.sh
-                    '''
+                dir(APP_DIR) {
+                    withCredentials([
+                        sshUserPrivateKey(credentialsId: 'app-server-ssh-key', keyFileVariable: 'APP_SERVER_SSH_KEY_PATH', usernameVariable: 'APP_SERVER_SSH_USER'),
+                        string(credentialsId: 'app-server-host', variable: 'APP_SERVER_HOST')
+                    ]) {
+                        sh '''
+                            chmod +x deploy.sh
+                            ./deploy.sh
+                        '''
+                    }
                 }
             }
         }
