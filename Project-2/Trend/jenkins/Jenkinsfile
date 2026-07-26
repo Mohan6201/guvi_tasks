@@ -18,10 +18,19 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                sh '''
-                    docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
-                    docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
-                '''
+                script {
+                    // checkout scm pulls the whole monorepo, but Dockerfile
+                    // only exists under this subfolder - set SOURCE_DIR as
+                    // a Jenkins global env var (Manage Jenkins > System)
+                    // if this Jenkinsfile lives in a monorepo subdirectory.
+                    def srcDir = env.SOURCE_DIR ?: '.'
+                    dir(srcDir) {
+                        sh '''
+                            docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+                            docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
+                        '''
+                    }
+                }
             }
         }
 
@@ -49,12 +58,17 @@ pipeline {
 
         stage('Deploy to EKS') {
             steps {
-                sh '''
-                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER}
-                    kubectl apply -f k8s/
-                    kubectl set image deployment/trend-app trend-app=${IMAGE_NAME}:${IMAGE_TAG}
-                    kubectl rollout status deployment/trend-app --timeout=120s
-                '''
+                script {
+                    def srcDir = env.SOURCE_DIR ?: '.'
+                    dir(srcDir) {
+                        sh '''
+                            aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER}
+                            kubectl apply -f k8s/
+                            kubectl set image deployment/trend-app trend-app=${IMAGE_NAME}:${IMAGE_TAG}
+                            kubectl rollout status deployment/trend-app --timeout=120s
+                        '''
+                    }
+                }
             }
         }
     }

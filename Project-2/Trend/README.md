@@ -241,6 +241,7 @@ Restart Jenkins after installation.
 2. Add:
    - `EKS_CLUSTER_NAME` = `trend-eks-cluster`
    - `AWS_DEFAULT_REGION` = `us-east-1`
+   - `SOURCE_DIR` = `Project-2/Trend` (only if, like this project, the Jenkinsfile lives inside a monorepo subfolder rather than at the repo root - `checkout scm` pulls the whole repo, so the Jenkinsfile needs to know where the actual `Dockerfile`/`k8s/` are relative to that checkout. Leave unset if your repo root IS the project root.)
 
 No AWS access key/secret needed - the Jenkins EC2 instance has an IAM instance profile (`trend-jenkins-ec2-role`, attached by Terraform) with an EKS access entry already granting it edit access to the cluster, so `aws eks update-kubeconfig` and `kubectl apply` in the Jenkinsfile just work.
 
@@ -252,9 +253,9 @@ No AWS access key/secret needed - the Jenkins EC2 instance has an IAM instance p
 2. **Build Triggers** → check **GitHub hook trigger for GITScm polling**
 3. **Pipeline** → **Pipeline script from SCM**
    - SCM: **Git**
-   - Repository URL: your GitHub repo URL
+   - Repository URL: the URL of the **repo root**, not a subfolder - e.g. `https://github.com/Mohan6201/guvi_tasks.git` (this project lives inside that monorepo at `Project-2/Trend`)
    - Branch: `*/main`
-   - Script Path: `jenkins/Jenkinsfile`
+   - Script Path: full path from repo root to the Jenkinsfile - e.g. `Project-2/Trend/jenkins/Jenkinsfile`, **not** just `jenkins/Jenkinsfile` (that only works if the repo root IS this project)
 4. Click **Save**
 
 ---
