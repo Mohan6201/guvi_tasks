@@ -136,19 +136,32 @@ cp .env.example .env
 
 Fill in all values in `.env`. Never commit this file.
 
+**Quoting passwords that contain `#`, spaces, or other special characters:** wrap the
+value in single quotes, e.g. `DOCKERHUB_PASSWORD='abc#123'`. Use single quotes, not
+double — double quotes still let bash expand `$` and backticks inside the value, which
+a real password could easily contain. (If a password itself contains a single quote,
+ask and we'll handle that one specially.)
+
 ---
 
 ### Step 3 — Load Environment Variables
 
-**Linux / macOS:**
+**Linux / macOS / Git Bash:**
 ```bash
-export $(cat .env | grep -v '#' | xargs)
+set -a
+source .env
+set +a
 ```
+Don't use `export $(cat .env | grep -v '#' | xargs)` — it breaks on any value containing
+`#` (grep treats the whole line as a comment and silently drops it, even inside quotes)
+or spaces (xargs word-splits it). `source` parses the file as real shell syntax instead,
+so quoted values with `#`/spaces load correctly.
 
 **Windows (PowerShell):**
 ```powershell
-Get-Content .env | Where-Object { $_ -notmatch '^#' -and $_ -ne '' } | ForEach-Object {
+Get-Content .env | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() -ne '' } | ForEach-Object {
     $key, $value = $_ -split '=', 2
+    $value = $value.Trim().Trim("'").Trim('"')
     [System.Environment]::SetEnvironmentVariable($key, $value, 'Process')
 }
 ```
