@@ -48,3 +48,11 @@ Thumbs.db
 # Monitoring logs
 logs/
 *.log
+
+# Rendered alertmanager config (contains real SMTP credentials) — keep the template
+monitoring/alertmanager.yml
+
+# EC2 key pairs and provisioning output — never commit private keys
+*.pem
+app-instance-info.txt
+jenkins-instance-info.txt

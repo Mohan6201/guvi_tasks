@@ -50,10 +50,15 @@ pipeline {
 
         stage('Deploy') {
             steps {
-                sh '''
-                    chmod +x deploy.sh
-                    ./deploy.sh
-                '''
+                withCredentials([
+                    sshUserPrivateKey(credentialsId: 'app-server-ssh-key', keyFileVariable: 'APP_SERVER_SSH_KEY_PATH', usernameVariable: 'APP_SERVER_SSH_USER'),
+                    string(credentialsId: 'app-server-host', variable: 'APP_SERVER_HOST')
+                ]) {
+                    sh '''
+                        chmod +x deploy.sh
+                        ./deploy.sh
+                    '''
+                }
             }
         }
     }

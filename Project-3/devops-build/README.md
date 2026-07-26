@@ -1,8 +1,8 @@
-# React E-Commerce Application — DevOps Deployment
+# devops-build — DevOps Deployment
 
 ## Task Description
 
-Dockerize and deploy a React application on **AWS EC2**, automate builds with **Jenkins CI/CD**, push images to **DockerHub** (`dev` and `prod` repos), and monitor the app with **Prometheus + Grafana**.
+Dockerize and deploy the [sriram-R-krishnan/devops-build](https://github.com/sriram-R-krishnan/devops-build) React app (ships as a pre-built `build/` folder) on **AWS EC2**, automate builds with **Jenkins CI/CD**, push images to **DockerHub** (`dev` and `prod` repos), and monitor the app with **Prometheus + Grafana**.
 
 ---
 
@@ -11,8 +11,8 @@ Dockerize and deploy a React application on **AWS EC2**, automate builds with **
 - **Docker** — Containerize the React app
 - **DockerHub** — Store images (`dev` public repo, `prod` private repo)
 - **Jenkins** — CI/CD pipeline with GitHub Webhook auto-trigger
-- **AWS EC2** — t2.micro instance to host the app and Jenkins
-- **Prometheus + Grafana + Alertmanager** — Monitoring and alerting
+- **AWS EC2** — two `t2.micro` instances: one runs the app, a separate one runs Jenkins
+- **Prometheus + Grafana + Alertmanager** — Monitoring and alerting, running on the app instance
 
 ---
 
@@ -24,18 +24,21 @@ devops-build/
 ├── docker-compose.yml            # Run app locally with docker-compose
 ├── nginx.conf                    # Custom nginx config with /health and /metrics
 ├── build.sh                      # Build and push Docker image to DockerHub
-├── deploy.sh                     # Pull and run container on port 80
+├── deploy.sh                     # SSH to the app server, pull and run the container
 ├── Jenkinsfile                   # Declarative pipeline — build, push, deploy
 ├── scripts/
-│   └── setup_ec2.sh              # Installs Docker + Jenkins on EC2 (user_data)
+│   ├── setup_app.sh              # Installs Docker only (app instance user_data)
+│   └── setup_jenkins.sh          # Installs Docker + Jenkins (Jenkins instance user_data)
 ├── aws/
-│   ├── deploy-ec2.sh             # Provisions EC2 via AWS CLI
-│   └── cleanup.sh                # Terminates EC2 and deletes resources
+│   ├── provision-app.sh          # Provisions the app EC2 instance via AWS CLI
+│   ├── provision-jenkins.sh      # Provisions the Jenkins EC2 instance via AWS CLI
+│   └── cleanup.sh                # Terminates EC2 instance(s) and deletes resources
 ├── monitoring/
 │   ├── docker-compose.yml        # Prometheus + Grafana + Alertmanager + Node Exporter
 │   ├── prometheus.yml            # Scrape config (app, node-exporter, prometheus)
 │   ├── alert_rules.yml           # Alert rules (app down, high CPU/memory/disk)
-│   └── alertmanager.yml          # Email notification config
+│   ├── alertmanager.yml.template # Email notification config (placeholders, tracked)
+│   └── render-config.sh          # Renders alertmanager.yml from the template + .env
 ├── .env                          # Your credentials — never commit this
 ├── .env.example                  # Safe template to commit
 ├── .dockerignore
@@ -45,14 +48,25 @@ devops-build/
 
 ---
 
+## Why two EC2 instances
+
+The spec only names one `t2.micro` for the app. Jenkins gets its own separate `t2.micro`
+because building Docker images, running Jenkins, and running the live app container on a
+single `t2.micro` (1 vCPU / 1 GB RAM) is too tight in practice. The monitoring stack runs
+on the **app** instance, so the total stays at two instances.
+
+---
+
 ## Branch Strategy
 
 | Branch | DockerHub Repo | Visibility |
 |--------|---------------|------------|
 | `dev` | `<username>/dev` | Public |
-| `master` | `<username>/prod` | Private |
+| `master`/`main` | `<username>/prod` | Private |
 
 Every push to either branch **automatically triggers** a Jenkins build via GitHub Webhook.
+`build.sh`/`deploy.sh` treat `main` the same as `master`, since this app lives in a monorepo
+whose default branch is `main`.
 
 ---
 
@@ -65,14 +79,20 @@ All credentials are driven through environment variables — **nothing is hardco
 | `AWS_ACCESS_KEY_ID` | AWS Access Key |
 | `AWS_SECRET_ACCESS_KEY` | AWS Secret Key |
 | `AWS_DEFAULT_REGION` | AWS region (e.g. `us-east-1`) |
-| `EC2_KEY_NAME` | EC2 key pair name |
+| `EC2_KEY_NAME` | EC2 key pair name (shared by both instances) |
 | `DOCKERHUB_USERNAME` | DockerHub username |
 | `DOCKERHUB_PASSWORD` | DockerHub password or access token |
+| `APP_SERVER_HOST` | Public IP/DNS of the app EC2 instance — `deploy.sh` SSHes here |
+| `APP_SERVER_SSH_USER` | SSH user for the app instance (default `ubuntu`) |
+| `APP_SERVER_SSH_KEY_PATH` | Local path to the `.pem` key used to SSH into the app instance |
 | `SMTP_HOST` | SMTP server (e.g. `smtp.gmail.com`) |
 | `SMTP_PORT` | SMTP port (e.g. `587`) |
 | `SMTP_USER` | SMTP email address |
 | `SMTP_PASSWORD` | Gmail App Password |
 | `ALERT_EMAIL` | Email to receive monitoring alerts |
+
+In Jenkins, `APP_SERVER_HOST` and the SSH key/user come from Jenkins credentials
+(`app-server-host`, `app-server-ssh-key`) instead of `.env` — see Step 9.
 
 ---
 
@@ -138,13 +158,9 @@ Get-Content .env | Where-Object { $_ -notmatch '^#' -and $_ -ne '' } | ForEach-O
 ### Step 4 — Test Docker Build Locally
 
 ```bash
-# Build the image
-docker build -t ecommerce-app .
+docker build -t devops-build-app .
+docker run -p 80:80 devops-build-app
 
-# Run it
-docker run -p 80:80 ecommerce-app
-
-# Verify
 curl http://localhost/health
 # Expected: healthy
 ```
@@ -159,38 +175,47 @@ curl http://localhost/health
 
 ---
 
-### Step 6 — Provision EC2 with AWS CLI
+### Step 6 — Provision the App EC2 Instance
 
 ```bash
 cd aws
-chmod +x deploy-ec2.sh
-./deploy-ec2.sh prod
+chmod +x provision-app.sh
+./provision-app.sh
 ```
 
 This will:
 1. Detect your current IP automatically
 2. Create a Security Group:
-   - Port 80: open to `0.0.0.0/0` (public)
-   - Port 8080: open to `0.0.0.0/0` (Jenkins)
+   - Port 80: open to `0.0.0.0/0` (public app access)
    - Port 22: open to **your IP only**
-3. Launch a `t2.micro` Ubuntu EC2 instance
-4. Run `scripts/setup_ec2.sh` on boot — installs Docker and Jenkins automatically
+3. Launch a `t2.micro` Ubuntu EC2 instance and install Docker via `scripts/setup_app.sh`
 
-Note the output — you need the public IP for the next steps.
+Note the public IP in `app-instance-info.txt` — set it as `APP_SERVER_HOST` in `.env`, and
+`APP_SERVER_SSH_KEY_PATH` to the generated `<EC2_KEY_NAME>.pem`.
 
 ---
 
-### Step 7 — Unlock Jenkins
+### Step 7 — Provision the Jenkins EC2 Instance
+
+```bash
+./provision-jenkins.sh
+```
+
+This will:
+1. Create a Security Group:
+   - Port 8080: open to `0.0.0.0/0` (Jenkins UI + GitHub webhook delivery)
+   - Port 22: open to **your IP only**
+2. Launch a second `t2.micro` Ubuntu EC2 instance and install Docker + Jenkins via
+   `scripts/setup_jenkins.sh`
 
 Wait **3-5 minutes** for the instance to boot, then:
 
 ```bash
-ssh -i <your-key>.pem ubuntu@<public_ip>
+ssh -i <your-key>.pem ubuntu@<jenkins_public_ip>
 ./get_jenkins_password.sh
 ```
 
-Open `http://<public_ip>:8080` and unlock Jenkins with the password.
-
+Open `http://<jenkins_public_ip>:8080` and unlock Jenkins with the password.
 Install **suggested plugins**, then create your admin user.
 
 ---
@@ -204,32 +229,34 @@ Go to **Manage Jenkins > Plugins > Available plugins** and install:
 | **Docker Pipeline** | Run Docker commands in pipeline |
 | **GitHub** | GitHub webhook integration |
 | **Pipeline** | Declarative Jenkinsfile support |
+| **SSH Agent** | Provides the `sshUserPrivateKey` credential binding used to deploy |
 
 Restart Jenkins after installation.
 
 ---
 
-### Step 9 — Add DockerHub Credentials to Jenkins
+### Step 9 — Add Credentials to Jenkins
 
-1. Go to **Manage Jenkins > Credentials > System > Global credentials**
-2. Click **Add Credentials**
-   - Kind: **Username with password**
-   - Username: your DockerHub username
-   - Password: your DockerHub password or access token
-   - ID: `dockerhub-creds` ← must match the Jenkinsfile exactly
-3. Click **Save**
+Go to **Manage Jenkins > Credentials > System > Global credentials** and add three:
+
+1. **DockerHub** — Kind: `Username with password`, ID: `dockerhub-creds` ← must match the Jenkinsfile
+2. **App server SSH key** — Kind: `SSH Username with private key`, Username: `ubuntu`,
+   Private key: paste the contents of `<EC2_KEY_NAME>.pem`, ID: `app-server-ssh-key`
+3. **App server host** — Kind: `Secret text`, Secret: the app instance's public IP,
+   ID: `app-server-host`
 
 ---
 
 ### Step 10 — Create Jenkins Pipeline Job
 
-1. Click **New Item** → name it `ecommerce-pipeline` → select **Pipeline** → OK
+1. Click **New Item** → name it `devops-build-pipeline` → select **Pipeline** → OK
 2. Under **Build Triggers**, check **GitHub hook trigger for GITScm polling**
 3. Under **Pipeline**, select **Pipeline script from SCM**
    - SCM: **Git**
    - Repository URL: your GitHub repo URL
-   - Branches to build: `*/dev` and `*/master` (click Add Branch)
-   - Script Path: `Jenkinsfile`
+   - Branches to build: `*/dev` and `*/master` (or `*/main`, click Add Branch)
+   - Script Path: `Project-3/devops-build/Jenkinsfile` (or `Jenkinsfile` if the repo root
+     already is the app directory)
 4. Click **Save**
 
 ---
@@ -258,7 +285,7 @@ git push origin dev
 Expected:
 - Jenkins auto-triggers
 - Docker image built and pushed to `<username>/dev`
-- App deployed on port 80
+- `deploy.sh` SSHes into the app instance and the app updates on port 80
 
 **Test 2 — Merge `dev` to `master`:**
 ```bash
@@ -270,29 +297,32 @@ git push origin master
 Expected:
 - Jenkins auto-triggers
 - Docker image built and pushed to `<username>/prod` (private)
-- App deployed on port 80
+- App updates on port 80
 
 ---
 
 ### Step 13 — Start Monitoring Stack
 
-SSH into the EC2 instance:
+SSH into the **app** EC2 instance (monitoring runs alongside the app, not on Jenkins):
 
 ```bash
-ssh -i <your-key>.pem ubuntu@<public_ip>
+ssh -i <your-key>.pem ubuntu@<app_public_ip>
 ```
 
-Update `monitoring/alertmanager.yml` with your SMTP credentials, then start:
+Export your `.env` on this instance too (Step 3), then render the real
+`alertmanager.yml` from the tracked template before starting the stack:
 
 ```bash
 cd monitoring
+chmod +x render-config.sh
+./render-config.sh   # writes alertmanager.yml (gitignored) from alertmanager.yml.template
 docker-compose up -d
 ```
 
 Access monitoring:
-- **Grafana:** `http://<public_ip>:3001` (admin / admin)
-- **Prometheus:** `http://<public_ip>:9090`
-- **Alertmanager:** `http://<public_ip>:9093`
+- **Grafana:** `http://<app_public_ip>:3001` (admin / admin)
+- **Prometheus:** `http://<app_public_ip>:9090`
+- **Alertmanager:** `http://<app_public_ip>:9093`
 
 In Grafana:
 1. Go to **Connections > Data Sources > Add** → Select **Prometheus**
@@ -304,20 +334,18 @@ In Grafana:
 ### Step 14 — Verify App and Monitoring
 
 ```bash
-# App health check
-curl http://<public_ip>/health
+curl http://<app_public_ip>/health
 # Expected: healthy
 
-# App metrics
-curl http://<public_ip>/metrics
+curl http://<app_public_ip>/metrics
 # Expected: application_up 1
 ```
 
 Test alert by stopping the container:
 ```bash
-docker stop ecommerce-prod
+docker stop devops-build-app
 # Wait ~1 minute — Alertmanager sends email alert
-docker start ecommerce-prod
+docker start devops-build-app
 ```
 
 ---
@@ -327,32 +355,40 @@ docker start ecommerce-prod
 ```bash
 cd aws
 chmod +x cleanup.sh
-./cleanup.sh prod
+./cleanup.sh all      # or: ./cleanup.sh app  /  ./cleanup.sh jenkins
 ```
 
 ---
 
 ## Security Group Configuration
 
+**App instance:**
+
 | Port | Source | Purpose |
 |------|--------|---------|
 | `80` | `0.0.0.0/0` | Public app access |
-| `8080` | `0.0.0.0/0` | Jenkins UI |
+| `22` | `<YOUR-IP>/32` | SSH — your IP only |
+
+**Jenkins instance:**
+
+| Port | Source | Purpose |
+|------|--------|---------|
+| `8080` | `0.0.0.0/0` | Jenkins UI + GitHub webhook delivery |
 | `22` | `<YOUR-IP>/32` | SSH — your IP only |
 
 ---
 
 ## Submission
 
-- GitHub repo URL (with `dev` and `master` branches)
-- Deployed site URL: `http://<EC2-public-IP>`
+- GitHub repo URL (with `dev` and `master`/`main` branches)
+- Deployed site URL: `http://<app-instance-public-IP>`
 - DockerHub images: `<username>/dev` and `<username>/prod`
 - Screenshots in repo:
   - Jenkins pipeline — successful build console output
   - Jenkins pipeline configuration page
-  - AWS EC2 console — instance running
-  - Security Group — showing port 22 restricted to your IP
+  - AWS EC2 console — both instances running
+  - Security Group — showing port 22 restricted to your IP (both instances)
   - DockerHub `dev` repo with image tags
   - DockerHub `prod` repo with image tags
-  - Deployed app in browser at EC2 IP
+  - Deployed app in browser at the app instance's IP
   - Monitoring dashboard (Grafana)

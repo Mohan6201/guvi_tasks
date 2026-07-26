@@ -1,31 +1,31 @@
 #!/bin/bash
 set -e
 
-ENVIRONMENT=${1:-dev}
+# Launches the Jenkins t2.micro (kept separate from the app instance — a single
+# t2.micro is too tight for Jenkins + Docker builds + a live container at once).
+#   - port 8080 open to anyone (GitHub webhook delivery + UI access)
+#   - port 22 restricted to the operator's own IP only
+#
+# Expects AWS_DEFAULT_REGION and EC2_KEY_NAME to already be exported from .env.
+
+# Git Bash on Windows rewrites leading-/ and file:// style args into Windows
+# paths before aws.exe sees them (e.g. mangling --user-data file://...).
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL="*"
+
 AWS_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 INSTANCE_TYPE="t2.micro"
 KEY_NAME="${EC2_KEY_NAME}"
+INSTANCE_NAME="devops-build-jenkins"
+SG_NAME="devops-build-jenkins-sg"
 
-echo "Deploying to AWS EC2 for $ENVIRONMENT environment"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if [ "$ENVIRONMENT" = "dev" ]; then
-    INSTANCE_NAME="ecommerce-dev"
-    SG_NAME="ecommerce-dev-sg"
-    PORT="80"
-elif [ "$ENVIRONMENT" = "prod" ]; then
-    INSTANCE_NAME="ecommerce-prod"
-    SG_NAME="ecommerce-prod-sg"
-    PORT="80"
-else
-    echo "Invalid environment. Use 'dev' or 'prod'"
-    exit 1
-fi
+echo "Provisioning Jenkins instance in $AWS_REGION"
 
-# Detect your current public IP for SSH restriction
 MY_IP=$(curl -s ifconfig.me)
 echo "Your IP: $MY_IP"
 
-# Fetch latest Ubuntu 22.04 AMI
 AMI_ID=$(aws ec2 describe-images \
     --region "$AWS_REGION" \
     --owners 099720109477 \
@@ -36,32 +36,23 @@ AMI_ID=$(aws ec2 describe-images \
 
 echo "Using AMI: $AMI_ID"
 
-# Create security group
 SG_ID=$(aws ec2 create-security-group \
     --group-name "$SG_NAME" \
-    --description "Security group for $ENVIRONMENT React app" \
+    --description "Jenkins instance — port 8080 public, SSH restricted to operator IP" \
     --region "$AWS_REGION" \
     --query 'GroupId' \
     --output text)
 
 echo "Security Group: $SG_ID"
 
-# Port 80 — open to everyone
-aws ec2 authorize-security-group-ingress \
-    --group-id "$SG_ID" --protocol tcp --port 80 \
-    --cidr 0.0.0.0/0 --region "$AWS_REGION"
-
-# Port 8080 (Jenkins) — open to everyone
 aws ec2 authorize-security-group-ingress \
     --group-id "$SG_ID" --protocol tcp --port 8080 \
     --cidr 0.0.0.0/0 --region "$AWS_REGION"
 
-# Port 22 — SSH restricted to your IP only
 aws ec2 authorize-security-group-ingress \
     --group-id "$SG_ID" --protocol tcp --port 22 \
     --cidr "$MY_IP/32" --region "$AWS_REGION"
 
-# Create key pair if it doesn't exist
 if ! aws ec2 describe-key-pairs --key-names "$KEY_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
     aws ec2 create-key-pair \
         --key-name "$KEY_NAME" \
@@ -72,13 +63,12 @@ if ! aws ec2 describe-key-pairs --key-names "$KEY_NAME" --region "$AWS_REGION" >
     echo "Key pair saved as ${KEY_NAME}.pem"
 fi
 
-# Launch instance with setup script as user_data
 INSTANCE_ID=$(aws ec2 run-instances \
     --image-id "$AMI_ID" \
     --instance-type "$INSTANCE_TYPE" \
     --key-name "$KEY_NAME" \
     --security-group-ids "$SG_ID" \
-    --user-data file://../scripts/setup_ec2.sh \
+    --user-data "file://${SCRIPT_DIR}/../scripts/setup_jenkins.sh" \
     --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$INSTANCE_NAME}]" \
     --region "$AWS_REGION" \
     --query 'Instances[0].InstanceId' \
@@ -96,9 +86,8 @@ PUBLIC_IP=$(aws ec2 describe-instances \
 
 echo ""
 echo "============================================"
-echo "  Instance is running!"
+echo "  Jenkins instance is running!"
 echo "  Public IP    : $PUBLIC_IP"
-echo "  App URL      : http://$PUBLIC_IP"
 echo "  Jenkins URL  : http://$PUBLIC_IP:8080"
 echo "  SSH command  : ssh -i ${KEY_NAME}.pem ubuntu@$PUBLIC_IP"
 echo "============================================"
@@ -106,11 +95,10 @@ echo ""
 echo "Wait 3-5 minutes for Jenkins and Docker to finish installing."
 echo "Then SSH in and run: ./get_jenkins_password.sh"
 
-cat > "${ENVIRONMENT}-instance-info.txt" <<EOF
-Instance ID  : $INSTANCE_ID
-Public IP    : $PUBLIC_IP
+cat > "jenkins-instance-info.txt" <<EOF
+Instance ID   : $INSTANCE_ID
+Public IP     : $PUBLIC_IP
 Security Group: $SG_ID
-App URL      : http://$PUBLIC_IP
-Jenkins URL  : http://$PUBLIC_IP:8080
-SSH command  : ssh -i ${KEY_NAME}.pem ubuntu@$PUBLIC_IP
+Jenkins URL   : http://$PUBLIC_IP:8080
+SSH command   : ssh -i ${KEY_NAME}.pem ubuntu@$PUBLIC_IP
 EOF

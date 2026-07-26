@@ -1,11 +1,9 @@
-version: '3.8'
-
 services:
   react-app:
     build: .
     ports:
       - "80:80"
-    container_name: devops-react-app
+    container_name: devops-build-app
     restart: unless-stopped
     environment:
       - NODE_ENV=production
