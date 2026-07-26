@@ -19,8 +19,8 @@ echo "Setting up DockerHub credentials..."
 # Note: This needs to be done manually in Jenkins UI
 # Manage Jenkins -> Manage Credentials -> Global -> Add Credentials
 # Username: your DockerHub username
-# Password: your DockerHub password
-# ID: dockerhub-credentials
+# Password: your DockerHub password/token
+# ID: dockerhub-creds   <- must match exactly (jenkins/Jenkinsfile reads credentials('dockerhub-creds'))
 
 # Create Kubernetes config credentials
 echo "Setting up Kubernetes credentials..."

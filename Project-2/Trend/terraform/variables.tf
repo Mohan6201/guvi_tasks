@@ -13,6 +13,12 @@ variable "cluster_name" {
   type        = string
 }
 
+variable "eks_version" {
+  description = "EKS Kubernetes version (must be a currently AWS-supported version - check with: aws eks describe-cluster-versions)"
+  type        = string
+  default     = "1.33"
+}
+
 variable "node_instance_type" {
   description = "EC2 instance type for EKS worker nodes"
   type        = string

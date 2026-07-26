@@ -73,31 +73,30 @@ Jenkins (EC2 t2.medium)
 
 ## Environment Variables
 
-All credentials and config are driven through environment variables — **nothing is hardcoded**.
+All non-secret config is driven through `.env` — **nothing is hardcoded**. AWS credentials are never stored in a file: Terraform and the AWS CLI use your locally-configured identity (`aws configure` / SSO), and Jenkins uses its own credential store for the DockerHub password (see below) - not this file.
 
 | Variable | Where Used | Description |
 |----------|-----------|-------------|
-| `AWS_ACCESS_KEY_ID` | Terraform, AWS CLI | AWS Access Key |
-| `AWS_SECRET_ACCESS_KEY` | Terraform, AWS CLI | AWS Secret Key |
 | `TF_VAR_aws_region` | Terraform | AWS region (e.g. `us-east-1`) |
 | `TF_VAR_environment` | Terraform | Environment tag (e.g. `production`) |
 | `TF_VAR_cluster_name` | Terraform | EKS cluster name |
 | `TF_VAR_node_instance_type` | Terraform | EKS worker node type (e.g. `t3.medium`) |
 | `TF_VAR_jenkins_instance_type` | Terraform | Jenkins EC2 type (e.g. `t2.medium`) |
-| `TF_VAR_key_name` | Terraform | EC2 key pair name for SSH |
-| `DOCKERHUB_USERNAME` | Jenkins global env | DockerHub username |
-| `DOCKERHUB_PASSWORD` | Jenkins credentials | DockerHub password/token |
+| `TF_VAR_key_name` | Terraform | Name of an EC2 key pair that **already exists** in the account/region |
+| `DOCKERHUB_USERNAME` | local scripts, Jenkins global env | DockerHub username (not secret) |
 | `EKS_CLUSTER_NAME` | Jenkins global env | EKS cluster to deploy to |
 | `AWS_DEFAULT_REGION` | Jenkins global env | AWS region for kubectl config |
+
+The DockerHub **password/token** is never put in `.env` or committed anywhere - it's entered exactly once, directly into Jenkins' own credential store (Step 10, credential ID `dockerhub-creds`), which is what `jenkins/Jenkinsfile` actually reads via `credentials('dockerhub-creds')`.
 
 ---
 
 ## Prerequisites
 
-1. **AWS Account** with EC2, EKS, IAM, and VPC permissions
+1. **AWS Account** with EC2, EKS, IAM, and VPC permissions, AWS CLI already configured (`aws sts get-caller-identity` works)
 2. **Terraform** >= 1.3.0
-3. **AWS CLI** installed locally
-4. **EC2 Key Pair** in your target region
+3. **kubectl** installed locally
+4. **EC2 Key Pair** already created in your target region (`aws ec2 describe-key-pairs` to check; `TF_VAR_key_name` in `.env` must match one exactly)
 5. **DockerHub account** — create a public repo `<username>/trend-app`
 
 ---
@@ -181,7 +180,7 @@ curl http://localhost:8080
 
 ```bash
 docker tag trend-app:test $DOCKERHUB_USERNAME/trend-app:latest
-echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+docker login -u "$DOCKERHUB_USERNAME"   # prompts for password/token interactively
 docker push $DOCKERHUB_USERNAME/trend-app:latest
 ```
 
@@ -242,8 +241,8 @@ Restart Jenkins after installation.
 2. Add:
    - `EKS_CLUSTER_NAME` = `trend-eks-cluster`
    - `AWS_DEFAULT_REGION` = `us-east-1`
-   - `AWS_ACCESS_KEY_ID` = your key
-   - `AWS_SECRET_ACCESS_KEY` = your secret
+
+No AWS access key/secret needed - the Jenkins EC2 instance has an IAM instance profile (`trend-jenkins-ec2-role`, attached by Terraform) with an EKS access entry already granting it edit access to the cluster, so `aws eks update-kubeconfig` and `kubectl apply` in the Jenkinsfile just work.
 
 ---
 

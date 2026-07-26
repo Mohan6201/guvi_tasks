@@ -175,10 +175,15 @@ resource "aws_iam_role_policy_attachment" "ec2_container_registry_readonly" {
 resource "aws_eks_cluster" "main" {
   name     = var.cluster_name
   role_arn = aws_iam_role.eks_cluster_role.arn
-  version  = "1.29"
+  version  = var.eks_version
 
   vpc_config {
     subnet_ids = concat(aws_subnet.public[*].id, aws_subnet.private[*].id)
+  }
+
+  access_config {
+    authentication_mode                         = "API_AND_CONFIG_MAP"
+    bootstrap_cluster_creator_admin_permissions = true
   }
 
   depends_on = [aws_iam_role_policy_attachment.eks_cluster_policy]
@@ -214,6 +219,61 @@ resource "aws_eks_node_group" "main" {
 
   tags = {
     Name = "trend-node-group"
+  }
+}
+
+# -------------------------------------------------------------------
+# IAM — Jenkins EC2 role (instance profile, no static AWS keys needed)
+# -------------------------------------------------------------------
+
+resource "aws_iam_role" "jenkins_role" {
+  name = "trend-jenkins-ec2-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "jenkins_eks_describe" {
+  name = "trend-jenkins-eks-describe"
+  role = aws_iam_role.jenkins_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["eks:DescribeCluster", "eks:ListClusters"]
+      Resource = "*"
+    }]
+  })
+}
+
+resource "aws_iam_instance_profile" "jenkins_profile" {
+  name = "trend-jenkins-instance-profile"
+  role = aws_iam_role.jenkins_role.name
+}
+
+# Grants the Jenkins EC2 role Kubernetes-level access (IAM permissions
+# alone don't grant kubectl access - EKS also needs this API-mode access
+# entry, same requirement CodeBuild had in Project-1).
+resource "aws_eks_access_entry" "jenkins" {
+  cluster_name  = aws_eks_cluster.main.name
+  principal_arn = aws_iam_role.jenkins_role.arn
+  type          = "STANDARD"
+}
+
+resource "aws_eks_access_policy_association" "jenkins_edit" {
+  cluster_name  = aws_eks_cluster.main.name
+  principal_arn = aws_iam_role.jenkins_role.arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSEditPolicy"
+
+  access_scope {
+    type = "cluster"
   }
 }
 
@@ -265,6 +325,7 @@ resource "aws_instance" "jenkins" {
   vpc_security_group_ids      = [aws_security_group.jenkins_sg.id]
   key_name                    = var.key_name
   associate_public_ip_address = true
+  iam_instance_profile        = aws_iam_instance_profile.jenkins_profile.name
   user_data                   = file("../scripts/setup_jenkins.sh")
 
   tags = {
