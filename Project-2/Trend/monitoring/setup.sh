@@ -4,7 +4,17 @@
 
 echo "Setting up monitoring stack..."
 
-# Apply monitoring namespace
+# kube-state-metrics (cluster object state: pod/deployment/node counts,
+# status, resource requests) - official upstream manifests, includes
+# its own ServiceAccount/RBAC. Prometheus scrapes it (see prometheus.yaml).
+echo "Installing kube-state-metrics..."
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/kube-state-metrics/main/examples/standard/cluster-role-binding.yaml
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/kube-state-metrics/main/examples/standard/cluster-role.yaml
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/kube-state-metrics/main/examples/standard/service-account.yaml
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/kube-state-metrics/main/examples/standard/deployment.yaml
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/kube-state-metrics/main/examples/standard/service.yaml
+
+# Apply monitoring namespace, RBAC, config, Prometheus deployment/service
 kubectl apply -f monitoring/prometheus.yaml
 
 # Wait for Prometheus to be ready

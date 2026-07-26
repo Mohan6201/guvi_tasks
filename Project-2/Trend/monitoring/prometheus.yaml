@@ -3,6 +3,44 @@ kind: Namespace
 metadata:
   name: monitoring
 ---
+# Prometheus needs to call the Kubernetes API to discover scrape targets
+# (kubernetes_sd_configs for pods/nodes) and to proxy to each node's
+# cAdvisor metrics endpoint. Without this RBAC, service discovery
+# returns zero targets and every kubernetes_sd_configs-based job stays
+# permanently down/empty - this was missing from the original manifest.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/proxy", "nodes/metrics", "services", "endpoints", "pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: monitoring
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -13,6 +51,7 @@ data:
     global:
       scrape_interval: 15s
     scrape_configs:
+      # Any pod with prometheus.io/scrape: "true" gets auto-discovered.
       - job_name: 'kubernetes-pods'
         kubernetes_sd_configs:
           - role: pod
@@ -24,11 +63,32 @@ data:
             action: replace
             target_label: __metrics_path__
             regex: (.+)
-      - job_name: 'trend-app'
+
+      # Cluster-level object state (pod/deployment/node counts, status,
+      # resource requests, etc.) - install via monitoring/setup.sh.
+      - job_name: 'kube-state-metrics'
         static_configs:
-          - targets: ['trend-app-service:80']
-        metrics_path: /metrics
-        scrape_interval: 30s
+          - targets: ['kube-state-metrics.kube-system.svc.cluster.local:8080']
+
+      # Per-node/per-container resource usage (CPU/memory/network) via
+      # the kubelet's built-in cAdvisor, proxied through the API server -
+      # this is what the ClusterRole/nodes/proxy permission above is for.
+      - job_name: 'kubernetes-cadvisor'
+        scheme: https
+        tls_config:
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -45,6 +105,7 @@ spec:
       labels:
         app: prometheus
     spec:
+      serviceAccountName: prometheus
       containers:
       - name: prometheus
         image: prom/prometheus:latest
