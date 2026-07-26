@@ -22,7 +22,10 @@ pipeline {
         stage('Determine Target Repo') {
             steps {
                 script {
-                    def branch = env.GIT_BRANCH?.replaceAll('origin/', '') ?: 'dev'
+                    // BRANCH_NAME is set by Multibranch Pipeline jobs directly (no
+                    // "origin/" prefix to strip); GIT_BRANCH is the fallback for a
+                    // plain Pipeline-from-SCM job run.
+                    def branch = env.BRANCH_NAME ?: env.GIT_BRANCH?.replaceAll('origin/', '') ?: 'dev'
                     if (branch == 'master' || branch == 'main') {
                         env.TARGET_REPO = "${DOCKERHUB_USERNAME}/prod"
                     } else {
