@@ -255,8 +255,12 @@ Go to **Manage Jenkins > Credentials > System > Global credentials** and add thr
 1. **DockerHub** — Kind: `Username with password`, ID: `dockerhub-creds` ← must match the Jenkinsfile
 2. **App server SSH key** — Kind: `SSH Username with private key`, Username: `ubuntu`,
    Private key: paste the contents of `<EC2_KEY_NAME>.pem`, ID: `app-server-ssh-key`
-3. **App server host** — Kind: `Secret text`, Secret: the app instance's public IP,
-   ID: `app-server-host`
+3. **App server host** — Kind: `Secret text`, Secret: the app instance's **private** IP
+   (not public — Jenkins and the app share a VPC/subnet, and connecting to the app's
+   public IP from another instance in the same VPC hits AWS's Internet Gateway round-trip
+   and doesn't reliably match security-group-referenced ingress rules, causing SSH to hang
+   and time out even though the rule looks correct), ID: `app-server-host`. Your local
+   `.env`'s `APP_SERVER_HOST` stays the public IP — your laptop isn't in that VPC.
 
 ---
 
