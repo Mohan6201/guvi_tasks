@@ -381,6 +381,7 @@ chmod +x cleanup.sh
 |------|--------|---------|
 | `80` | `0.0.0.0/0` | Public app access |
 | `22` | `<YOUR-IP>/32` | SSH — your IP only |
+| `22` | Jenkins security group | Deploy stage SSHes in from Jenkins — added automatically by `provision-jenkins.sh` once both instances exist, not opened to the internet |
 
 **Jenkins instance:**
 

@@ -58,6 +58,25 @@ else
         --cidr "$MY_IP/32" --region "$AWS_REGION"
 fi
 
+# The Deploy stage SSHes from Jenkins into the app instance, so the app SG's
+# port 22 rule (operator IP only) needs to additionally trust this Jenkins SG
+# specifically - not opened to the internet, just this one other instance.
+APP_SG_ID=$(aws ec2 describe-security-groups \
+    --filters "Name=group-name,Values=devops-build-app-sg" \
+    --region "$AWS_REGION" \
+    --query 'SecurityGroups[0].GroupId' \
+    --output text 2>/dev/null || true)
+
+if [ -n "$APP_SG_ID" ] && [ "$APP_SG_ID" != "None" ]; then
+    aws ec2 authorize-security-group-ingress \
+        --group-id "$APP_SG_ID" --protocol tcp --port 22 \
+        --source-group "$SG_ID" --region "$AWS_REGION" 2>/dev/null \
+        && echo "Authorized Jenkins SG to SSH into the app instance ($APP_SG_ID)" \
+        || echo "App SG already allows Jenkins SSH access (or rule exists)"
+else
+    echo "App instance not provisioned yet - run provision-app.sh first, then re-run this to wire up SSH access, or add it manually."
+fi
+
 if ! aws ec2 describe-key-pairs --key-names "$KEY_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
     aws ec2 create-key-pair \
         --key-name "$KEY_NAME" \
