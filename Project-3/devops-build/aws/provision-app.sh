@@ -38,7 +38,7 @@ echo "Using AMI: $AMI_ID"
 
 SG_ID=$(aws ec2 create-security-group \
     --group-name "$SG_NAME" \
-    --description "App instance — port 80 public, SSH restricted to operator IP" \
+    --description "App instance - port 80 public, SSH restricted to operator IP" \
     --region "$AWS_REGION" \
     --query 'GroupId' \
     --output text)
