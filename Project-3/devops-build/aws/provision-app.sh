@@ -8,11 +8,6 @@ set -e
 # Expects AWS_DEFAULT_REGION and EC2_KEY_NAME to already be exported from .env
 # (see README — never hardcode these).
 
-# Git Bash on Windows rewrites leading-/ and file:// style args into Windows
-# paths before aws.exe sees them (e.g. mangling --user-data file://...).
-export MSYS_NO_PATHCONV=1
-export MSYS2_ARG_CONV_EXCL="*"
-
 AWS_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 INSTANCE_TYPE="t2.micro"
 KEY_NAME="${EC2_KEY_NAME}"
@@ -36,22 +31,32 @@ AMI_ID=$(aws ec2 describe-images \
 
 echo "Using AMI: $AMI_ID"
 
-SG_ID=$(aws ec2 create-security-group \
-    --group-name "$SG_NAME" \
-    --description "App instance - port 80 public, SSH restricted to operator IP" \
+EXISTING_SG_ID=$(aws ec2 describe-security-groups \
+    --filters "Name=group-name,Values=$SG_NAME" \
     --region "$AWS_REGION" \
-    --query 'GroupId' \
-    --output text)
+    --query 'SecurityGroups[0].GroupId' \
+    --output text 2>/dev/null || true)
 
-echo "Security Group: $SG_ID"
+if [ -n "$EXISTING_SG_ID" ] && [ "$EXISTING_SG_ID" != "None" ]; then
+    SG_ID="$EXISTING_SG_ID"
+    echo "Security Group already exists, reusing: $SG_ID"
+else
+    SG_ID=$(aws ec2 create-security-group \
+        --group-name "$SG_NAME" \
+        --description "App instance - port 80 public, SSH restricted to operator IP" \
+        --region "$AWS_REGION" \
+        --query 'GroupId' \
+        --output text)
+    echo "Security Group: $SG_ID"
 
-aws ec2 authorize-security-group-ingress \
-    --group-id "$SG_ID" --protocol tcp --port 80 \
-    --cidr 0.0.0.0/0 --region "$AWS_REGION"
+    aws ec2 authorize-security-group-ingress \
+        --group-id "$SG_ID" --protocol tcp --port 80 \
+        --cidr 0.0.0.0/0 --region "$AWS_REGION"
 
-aws ec2 authorize-security-group-ingress \
-    --group-id "$SG_ID" --protocol tcp --port 22 \
-    --cidr "$MY_IP/32" --region "$AWS_REGION"
+    aws ec2 authorize-security-group-ingress \
+        --group-id "$SG_ID" --protocol tcp --port 22 \
+        --cidr "$MY_IP/32" --region "$AWS_REGION"
+fi
 
 if ! aws ec2 describe-key-pairs --key-names "$KEY_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
     aws ec2 create-key-pair \
@@ -68,7 +73,7 @@ INSTANCE_ID=$(aws ec2 run-instances \
     --instance-type "$INSTANCE_TYPE" \
     --key-name "$KEY_NAME" \
     --security-group-ids "$SG_ID" \
-    --user-data "file://${SCRIPT_DIR}/../scripts/setup_app.sh" \
+    --user-data "$(cat "${SCRIPT_DIR}/../scripts/setup_app.sh")" \
     --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$INSTANCE_NAME}]" \
     --region "$AWS_REGION" \
     --query 'Instances[0].InstanceId' \
