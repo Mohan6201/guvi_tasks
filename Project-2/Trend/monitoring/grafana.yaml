@@ -19,10 +19,31 @@ data:
     root_url = http://localhost:3000
 
     [database]
+    # sqlite3 file lives under [paths].data (/var/lib/grafana by default),
+    # which is now backed by the PVC below - NOT under /etc/grafana.
     type = sqlite3
 
     [security]
     admin_user = admin
+---
+# Without this, Grafana's SQLite DB (all dashboards, datasources, users)
+# lives only in the container's writable layer - any restart (crash,
+# OOMKill, node drain, rollout) wipes it back to a blank install. This
+# is exactly what was happening: 256Mi was too low for grafana/latest
+# (it actually uses ~350-450Mi), so it OOMKilled repeatedly and lost
+# everything each time.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+  namespace: monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp2
+  resources:
+    requests:
+      storage: 1Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -39,6 +60,11 @@ spec:
       labels:
         app: grafana
     spec:
+      # A freshly-provisioned EBS volume is root-owned; the official
+      # Grafana image runs as uid/gid 472 and can't write to it without
+      # this - kubelet chgrp's the mounted volume to fsGroup on attach.
+      securityContext:
+        fsGroup: 472
       containers:
         - name: grafana
           image: grafana/grafana:latest
@@ -53,17 +79,22 @@ spec:
           volumeMounts:
             - name: grafana-config
               mountPath: /etc/grafana
+            - name: grafana-data
+              mountPath: /var/lib/grafana
           resources:
             requests:
-              memory: "128Mi"
+              memory: "256Mi"
               cpu: "100m"
             limits:
-              memory: "256Mi"
-              cpu: "200m"
+              memory: "768Mi"
+              cpu: "500m"
       volumes:
         - name: grafana-config
           configMap:
             name: grafana-config
+        - name: grafana-data
+          persistentVolumeClaim:
+            claimName: grafana-data
 ---
 apiVersion: v1
 kind: Service
