@@ -37,8 +37,7 @@ echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-st
 
 docker pull "$IMAGE_NAME:$TAG"
 
-docker stop "$CONTAINER_NAME" 2>/dev/null || true
-docker rm "$CONTAINER_NAME" 2>/dev/null || true
+docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
 
 docker run -d \
     --name "$CONTAINER_NAME" \
