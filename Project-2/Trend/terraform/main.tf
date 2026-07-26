@@ -326,7 +326,10 @@ resource "aws_instance" "jenkins" {
   key_name                    = var.key_name
   associate_public_ip_address = true
   iam_instance_profile        = aws_iam_instance_profile.jenkins_profile.name
-  user_data                   = file("../scripts/setup_jenkins.sh")
+  user_data = templatefile("../scripts/setup_jenkins.sh.tftpl", {
+    jenkins_apt_key_url  = var.jenkins_apt_key_url
+    jenkins_java_package = var.jenkins_java_package
+  })
 
   tags = {
     Name = "trend-jenkins-server"

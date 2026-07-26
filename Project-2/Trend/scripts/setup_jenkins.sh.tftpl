@@ -14,15 +14,16 @@ systemctl enable docker
 systemctl start docker
 
 # -------------------------------------------------------------------
-# Java 17 + Jenkins
+# Java + Jenkins
 # -------------------------------------------------------------------
 
-apt-get install -y openjdk-17-jre
+apt-get install -y ${jenkins_java_package}
 
-curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key \
-  | tee /usr/share/keyrings/jenkins-keyring.asc > /dev/null
+mkdir -p /etc/apt/keyrings
+curl -fsSL ${jenkins_apt_key_url} \
+  | tee /etc/apt/keyrings/jenkins-keyring.asc > /dev/null
 
-echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] \
+echo "deb [signed-by=/etc/apt/keyrings/jenkins-keyring.asc] \
   https://pkg.jenkins.io/debian-stable binary/" \
   | tee /etc/apt/sources.list.d/jenkins.list > /dev/null
 
