@@ -37,9 +37,37 @@ echo "Prometheus URL: http://$PROMETHEUS_URL:9090"
 echo "Grafana URL: http://$GRAFANA_URL:3000"
 echo "Grafana credentials: admin/admin123"
 
-# Instructions for Grafana dashboard setup
+# Auto-provision the Prometheus datasource and the verified cluster
+# dashboard via Grafana's API, instead of manual UI clicking. The
+# dashboard JSON only has confirmed-working queries (see
+# trend-cluster-health-dashboard.json comments in git history for why:
+# community dashboard 315 was tried first and mostly showed N/A - its
+# queries assume Docker's old cgroup/container naming, which containerd
+# on modern EKS nodes never sets).
 echo ""
-echo "To set up Grafana dashboard:"
-echo "1. Login to Grafana at http://$GRAFANA_URL:3000"
-echo "2. Add Prometheus as data source: http://prometheus-service:9090"
-echo "3. Import Kubernetes dashboard templates"
+echo "Waiting for Grafana's LoadBalancer DNS to be reachable..."
+for i in $(seq 1 30); do
+  curl -sf "http://$GRAFANA_URL:3000/api/health" > /dev/null 2>&1 && break
+  sleep 10
+done
+
+echo "Adding Prometheus datasource..."
+DS_RESPONSE=$(curl -s -u admin:admin123 -X POST "http://$GRAFANA_URL:3000/api/datasources" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Prometheus","type":"prometheus","url":"http://prometheus-service:9090","access":"proxy","isDefault":true}')
+DS_UID=$(echo "$DS_RESPONSE" | grep -oE '"uid":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+if [ -z "$DS_UID" ]; then
+  echo "Datasource may already exist, looking it up..."
+  DS_UID=$(curl -s -u admin:admin123 "http://$GRAFANA_URL:3000/api/datasources/name/Prometheus" | grep -oE '"uid":"[^"]*"' | head -1 | cut -d'"' -f4)
+fi
+
+echo "Importing Trend Cluster Health dashboard..."
+sed "s/PROM_DATASOURCE_UID/${DS_UID}/g" monitoring/trend-cluster-health-dashboard.json > /tmp/dash-import.json
+curl -s -u admin:admin123 -X POST "http://$GRAFANA_URL:3000/api/dashboards/db" \
+  -H "Content-Type: application/json" \
+  --data-binary @/tmp/dash-import.json
+rm -f /tmp/dash-import.json
+
+echo ""
+echo "Dashboard ready: http://$GRAFANA_URL:3000/d/trend-cluster-health"
