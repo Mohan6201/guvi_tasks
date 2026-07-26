@@ -5,7 +5,12 @@ yarn-debug.log*
 yarn-error.log*
 
 # Production builds
-dist/
+# NOTE: dist/ is intentionally NOT ignored for this project - the
+# vendor-provided "Trend" repo ships only a prebuilt dist/, with no
+# source/package.json to regenerate it from (see dist/README.md from
+# the upstream repo). It IS the source as far as this repo is
+# concerned, so it must be committed for Jenkins/Docker builds to have
+# anything to COPY from a fresh clone.
 build/
 
 # Environment variables
