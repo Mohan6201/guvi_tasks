@@ -10,7 +10,7 @@ Dockerize and deploy the [sriram-R-krishnan/devops-build](https://github.com/sri
 
 - **Docker** — Containerize the React app
 - **DockerHub** — Store images (`dev` public repo, `prod` private repo)
-- **Jenkins** — CI/CD pipeline with GitHub Webhook auto-trigger
+- **Jenkins** — Multibranch Pipeline, `dev`/`main` tracked and auto-triggered independently via GitHub Webhook
 - **AWS EC2** — two `t2.micro` instances: one runs the app, a separate one runs Jenkins
 - **Prometheus + Grafana + Alertmanager** — Monitoring and alerting, running on the app instance
 
@@ -186,6 +186,14 @@ curl http://localhost/health
 2. Create repository `<username>/dev` → set to **Public**
 3. Create repository `<username>/prod` → set to **Private**
 
+Use exactly these two names — `dev` and `prod` — not a variant like `<project>-dev`. Docker Hub
+auto-creates a repository on the first `docker push` to a name that doesn't exist yet, and
+`build.sh`/`deploy.sh`/the Jenkinsfile always push to `<username>/dev` and `<username>/prod`
+literally. If you skip this step, both get created automatically on first push anyway — but
+**auto-created repositories always default to Public**, so if you let `prod` auto-create you
+must go back afterward (repo → Settings → Visibility) and switch it to Private by hand, or the
+"prod must be private" requirement silently fails even though everything else works.
+
 ---
 
 ### Step 6 — Provision the App EC2 Instance
@@ -241,6 +249,7 @@ Go to **Manage Jenkins > Plugins > Available plugins** and install:
 |--------|---------|
 | **Docker Pipeline** | Run Docker commands in pipeline |
 | **GitHub** | GitHub webhook integration |
+| **GitHub Branch Source** | Powers the Multibranch Pipeline job in Step 10 — discovers `dev`/`main` independently and lets the same webhook trigger just the branch that changed |
 | **Pipeline** | Declarative Jenkinsfile support |
 | **SSH Agent** | Provides the `sshUserPrivateKey` credential binding used to deploy |
 
@@ -264,21 +273,45 @@ Go to **Manage Jenkins > Credentials > System > Global credentials** and add thr
 
 ---
 
-### Step 10 — Create Jenkins Pipeline Job
+### Step 10 — Create Jenkins Pipeline Job (Multibranch Pipeline)
 
-1. Click **New Item** → name it `devops-build-pipeline` → select **Pipeline** → OK
-2. Under **Build Triggers**, check **GitHub hook trigger for GITScm polling**
-3. Under **Pipeline**, select **Pipeline script from SCM**
-   - SCM: **Git**
-   - Repository URL: your GitHub repo URL
-   - Branches to build: `*/dev` and `*/master` (or `*/main`, click Add Branch)
-   - Script Path: `Project-3/devops-build/Jenkinsfile` (or `Jenkinsfile` if the repo root
-     already is the app directory)
-4. Click **Save**
+Use a **Multibranch Pipeline**, not a plain "Pipeline" job — this matters, not just a naming
+preference. A plain "Pipeline script from SCM" job with two hardcoded branch specs
+(`*/dev` and `*/main`) plus a GitHub push trigger looks like it should auto-build both branches,
+but it doesn't reliably: Jenkins' lightweight-checkout polling only tracks change-detection for
+one branch spec at a time, so pushes to whichever branch it isn't currently tracking silently
+never trigger a build — confirmed live, where GitHub's own webhook log showed a `main` push
+delivered successfully (`200 OK`) while zero builds were ever created for it. A Multibranch
+Pipeline discovers and tracks each branch independently and doesn't have this problem.
+
+1. Click **New Item** → name it `devops-build-pipeline` → select **Multibranch Pipeline** → OK
+2. Under **Branch Sources**, click **Add source** → **GitHub**
+   - Credentials: leave as `- none -` first (a public repo doesn't need one). Only add a
+     Personal Access Token credential here if a later scan fails with a rate-limit error —
+     anonymous GitHub API access is capped at 60 requests/hour, and Jenkins' own rate limiter
+     will visibly sleep for minutes at a time on that budget; a PAT raises it to 5,000/hour and
+     removes the throttling entirely.
+   - Owner: `<your-github-username>`, Repository: `<your-repo-name>` (select from the dropdown
+     once it loads)
+3. Under **Build Configuration**, Mode: `by Jenkinsfile`, Script Path:
+   `Project-3/devops-build/Jenkinsfile` (or `Jenkinsfile` if the repo root already is the app
+   directory)
+4. Leave **Scan Multibranch Pipeline Triggers** at its default (unchecked) — you don't need
+   periodic polling, the webhook (Step 11) handles instant triggering once this job type is in
+   place
+5. Click **Save**
+
+Saving immediately runs a first-time branch scan, which discovers `dev` and `main` as separate
+sub-jobs and schedules an initial build for each — this is expected and is itself a useful first
+test of both branches.
 
 ---
 
 ### Step 11 — Set Up GitHub Webhook
+
+Same webhook endpoint regardless of job type — the GitHub Branch Source plugin listens on the
+same URL the classic trigger would have used, it just resolves which specific branch changed
+instead of firing one shared trigger for the whole job.
 
 1. Go to your GitHub repo → **Settings > Webhooks > Add webhook**
 2. Fill in:
@@ -291,8 +324,13 @@ Go to **Manage Jenkins > Credentials > System > Global credentials** and add thr
 
 ### Step 12 — Test the Full Pipeline
 
+This is separate from Step 10's initial scan-triggered builds — it specifically proves the
+webhook-driven auto-trigger works for a *new* push on each branch, not just the one-time
+discovery scan.
+
 **Test 1 — Push to `dev` branch:**
 ```bash
+git checkout dev
 echo "# test" >> README.md
 git add README.md
 git commit -m "trigger dev build"
@@ -300,19 +338,20 @@ git push origin dev
 ```
 
 Expected:
-- Jenkins auto-triggers
+- Jenkins auto-triggers a build on the `dev` sub-job specifically
 - Docker image built and pushed to `<username>/dev`
 - `deploy.sh` SSHes into the app instance and the app updates on port 80
 
-**Test 2 — Merge `dev` to `master`:**
+**Test 2 — Merge `dev` to `main`** (this repo's default branch — use `main`, not `master`,
+unless you actually renamed your default branch):
 ```bash
-git checkout master
+git checkout main
 git merge dev
-git push origin master
+git push origin main
 ```
 
 Expected:
-- Jenkins auto-triggers
+- Jenkins auto-triggers a build on the `main` sub-job specifically
 - Docker image built and pushed to `<username>/prod` (private)
 - App updates on port 80
 
@@ -320,31 +359,58 @@ Expected:
 
 ### Step 13 — Start Monitoring Stack
 
-SSH into the **app** EC2 instance (monitoring runs alongside the app, not on Jenkins):
+Monitoring runs alongside the app on the **app** EC2 instance, not on Jenkins — but the
+`monitoring/` folder isn't part of the Docker image, so it needs to be copied over separately
+before it can run there.
 
+**Copy the monitoring folder to the app instance** (run from `devops-build/`, not `aws/`):
 ```bash
-ssh -i <your-key>.pem ubuntu@<app_public_ip>
+scp -i aws/<EC2_KEY_NAME>.pem -r monitoring ubuntu@<app_public_ip>:~/monitoring
 ```
 
-Export your `.env` on this instance too (Step 3), then render the real
-`alertmanager.yml` from the tracked template before starting the stack:
-
+**SSH in and start it:**
 ```bash
+ssh -i aws/<EC2_KEY_NAME>.pem ubuntu@<app_public_ip>
+```
+The remote instance doesn't have your `.env` file, so export the SMTP values directly (quote
+any value containing `#`, spaces, or `$` — see Step 2):
+```bash
+export SMTP_HOST=smtp.gmail.com
+export SMTP_PORT=587
+export SMTP_USER=your-gmail@gmail.com
+export SMTP_PASSWORD='your app password'
+export ALERT_EMAIL=your-alert-email@example.com
+
 cd monitoring
 chmod +x render-config.sh
 ./render-config.sh   # writes alertmanager.yml (gitignored) from alertmanager.yml.template
-docker-compose up -d
+docker compose up -d
 ```
+Use `docker compose` (a space, no hyphen) — the standalone `docker-compose` binary isn't
+installed by this project's Docker setup; modern Docker ships Compose as a plugin instead, and
+`docker-compose` (the old hyphenated command) isn't found.
 
-Access monitoring:
-- **Grafana:** `http://<app_public_ip>:3001` (admin / admin)
-- **Prometheus:** `http://<app_public_ip>:9090`
-- **Alertmanager:** `http://<app_public_ip>:9093`
+**Viewing Grafana/Prometheus/Alertmanager:** their ports (3001, 9090, 9093) are deliberately
+**not** opened on the app instance's security group — only 80 and 22 are (see Security Group
+Configuration below), so opening more ports just to view dashboards would go beyond what the
+spec asks for. Instead, tunnel them through the SSH port you already have access to. From your
+own machine, in a **separate** terminal you leave open:
+```bash
+ssh -i aws/<EC2_KEY_NAME>.pem -L 3001:localhost:3001 -L 9090:localhost:9090 -L 9093:localhost:9093 ubuntu@<app_public_ip>
+```
+Now `http://localhost:3001`, `http://localhost:9090`, `http://localhost:9093` on your own
+machine reach Grafana, Prometheus, and Alertmanager respectively, for as long as that SSH
+session stays open.
 
-In Grafana:
+In Grafana (`http://localhost:3001`, admin/admin):
 1. Go to **Connections > Data Sources > Add** → Select **Prometheus**
-2. URL: `http://localhost:9090` → **Save & Test**
-3. Go to **Dashboards > Import** → Enter ID `1860` → **Import**
+2. URL: `http://prometheus:9090` — **not** `localhost:9090`. Grafana itself runs inside a
+   container on the compose network, so `localhost` from its point of view means "myself," not
+   Prometheus; `prometheus` is the other container's service name on that same network, which
+   Docker Compose resolves automatically → **Save & Test** (expect "Successfully queried the
+   Prometheus API")
+3. Go to **Dashboards > New > Import** → Enter ID `1860` (community "Node Exporter Full"
+   dashboard) → **Load** → select the Prometheus data source → **Import**
 
 ---
 
@@ -364,6 +430,10 @@ docker stop devops-build-app
 # Wait ~1 minute — Alertmanager sends email alert
 docker start devops-build-app
 ```
+You can also watch the alert transition from nothing to **firing** in real time at
+`http://localhost:9090/alerts` (through the SSH tunnel from Step 13) — refresh after about a
+minute (the rule requires 1 minute of continuous downtime before it fires) and
+`ApplicationDown` should turn red.
 
 ---
 
