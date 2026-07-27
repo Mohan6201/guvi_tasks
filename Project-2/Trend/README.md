@@ -115,15 +115,22 @@ Fill in your actual values in `.env`. Never commit this file.
 
 ### Step 2 — Load Environment Variables
 
-**Linux / macOS:**
+**Linux / macOS / Git Bash:**
 ```bash
-export $(cat .env | grep -v '#' | xargs)
+set -a
+source .env
+set +a
 ```
+Don't use `export $(cat .env | grep -v '#' | xargs)` — it silently drops any value containing
+`#` (grep treats the whole line as a comment, even inside quotes) and breaks on values with
+spaces (xargs word-splits them). `source` parses the file as real shell syntax instead, so
+quoted values load correctly regardless of what characters they contain.
 
 **Windows (PowerShell):**
 ```powershell
-Get-Content .env | Where-Object { $_ -notmatch '^#' -and $_ -ne '' } | ForEach-Object {
+Get-Content .env | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() -ne '' } | ForEach-Object {
     $key, $value = $_ -split '=', 2
+    $value = $value.Trim().Trim("'").Trim('"')
     [System.Environment]::SetEnvironmentVariable($key, $value, 'Process')
 }
 ```
@@ -190,10 +197,18 @@ docker push $DOCKERHUB_USERNAME/trend-app:latest
 
 ```bash
 kubectl apply -f k8s/
+kubectl set image deployment/trend-app trend-app=$DOCKERHUB_USERNAME/trend-app:latest
 kubectl get pods
 kubectl get svc trend-app-loadbalancer
 # Wait for EXTERNAL-IP to be assigned (~2 minutes)
 ```
+
+`k8s/deployment.yaml`'s `image: trend-app:latest` field has no registry/username prefix — it's
+a placeholder, not a real pullable image. Skipping the `kubectl set image` line above leaves
+pods trying to pull `trend-app:latest` from Docker Hub's `library/` namespace, which doesn't
+exist, and they'll sit in `ImagePullBackOff`. The Jenkinsfile's Deploy stage already runs the
+equivalent `kubectl set image` automatically on every pipeline run — this manual step is only
+needed for this one first-time deploy, before Jenkins exists yet.
 
 Access the app at `http://<EXTERNAL-IP>`.
 
@@ -285,23 +300,32 @@ Jenkins should auto-trigger within seconds and run all 5 pipeline stages.
 
 ### Step 14 — Deploy Monitoring Stack
 
+Run this from the **repo root** (`Trend/`), not from inside `monitoring/` — the script's own
+`kubectl apply -f monitoring/...` paths are relative to the repo root, so running it from
+`monitoring/` makes it look for `monitoring/monitoring/prometheus.yaml`, which doesn't exist.
+
 ```bash
-cd monitoring
-chmod +x setup.sh
-./setup.sh
+chmod +x monitoring/setup.sh
+./monitoring/setup.sh
 ```
 
-Access monitoring (wait ~2 min for LoadBalancer IPs):
+This does more than just apply the manifests: it also waits for Prometheus and Grafana to
+become ready, then auto-provisions the Prometheus datasource and imports a pre-built
+`trend-cluster-health-dashboard.json` dashboard directly via Grafana's API — there is no manual
+"Data Sources > Add" or "Dashboards > Import" step to do afterward. (An earlier attempt used
+community dashboard ID 315 first; most of its panels showed no data because its queries assume
+Docker's old cgroup/container naming, which containerd on modern EKS nodes never sets — the
+custom dashboard replaced it with pre-verified working queries.)
+
+The script prints the dashboard URL directly at the end:
+```
+Dashboard ready: http://<grafana-lb-ip>:3000/d/trend-cluster-health
+```
+Log in with `admin` / `admin123` if prompted. Prometheus itself is reachable separately at
+`http://<prometheus-lb-ip>:9090` — get both LoadBalancer IPs with:
 ```bash
 kubectl get svc -n monitoring
 ```
-
-- **Prometheus:** `http://<prometheus-lb-ip>:9090`
-- **Grafana:** `http://<grafana-lb-ip>:3000` (admin / admin123)
-
-In Grafana:
-1. **Connections > Data Sources > Add** → Prometheus → URL: `http://prometheus-service.monitoring:9090`
-2. **Dashboards > Import** → ID `3119` (Kubernetes cluster overview) → Import
 
 ---
 

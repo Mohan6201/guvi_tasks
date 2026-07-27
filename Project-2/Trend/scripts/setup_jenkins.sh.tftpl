@@ -32,8 +32,12 @@ apt-get install -y jenkins
 
 usermod -aG docker jenkins
 
+# apt install jenkins already auto-started the service, so the docker
+# group change only takes effect after an explicit restart - `start`
+# on an already-running unit is a no-op and leaves the jenkins user
+# without docker access until this restart happens.
 systemctl enable jenkins
-systemctl start jenkins
+systemctl restart jenkins
 
 # -------------------------------------------------------------------
 # kubectl
