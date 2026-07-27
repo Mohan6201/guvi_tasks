@@ -135,9 +135,12 @@ Creates `$CODEPIPELINE_NAME` with three stages:
 > CodeDeploy" stage, as the assignment brief describes it, isn't something
 > AWS actually offers. The documented, working pattern is a CodeBuild
 > project that runs `kubectl apply` as the Deploy action, which is what
-> `buildspec-deploy.yml` + this pipeline do. `appspec.yml` and
-> `scripts/*.sh` are kept in the repo only as a reference for what each
-> deploy step conceptually does; they are not invoked by anything.
+> `buildspec-deploy.yml` + this pipeline do. An `appspec.yml` was kept
+> around briefly as a reference for what each deploy step conceptually
+> does, but has since been removed, since CodeDeploy can't target EKS at
+> all and keeping it risked implying a deploy path that doesn't actually
+> exist. `scripts/*.sh` remain for now as conceptual reference only; none
+> of it is invoked by anything.
 
 Trigger a run:
 ```bash
@@ -156,10 +159,15 @@ kubectl get service ${APP_NAME}-service -n $K8S_NAMESPACE -o jsonpath='{.status.
 ```
 
 The LoadBalancer hostname is a DNS name, not an ARN - to get the actual
-ARN (needed for submission), match it against ELBv2:
+ARN (needed for submission), match it against the **classic** ELB API, not
+`elbv2` - a plain `type: LoadBalancer` Service on EKS with no AWS Load
+Balancer Controller installed provisions a Classic Load Balancer, which
+`elbv2` (Application/Network Load Balancers only) can't see at all and
+will just return an empty result for:
 ```bash
-aws elbv2 describe-load-balancers --region $AWS_REGION \
-  --query "LoadBalancers[?contains(DNSName, '<hostname-prefix-from-above>')].LoadBalancerArn" --output text
+aws elb describe-load-balancers --region $AWS_REGION \
+  --query "LoadBalancerDescriptions[?contains(DNSName, '<hostname-prefix-from-above>')].LoadBalancerName" --output text
+# then: arn:aws:elasticloadbalancing:$AWS_REGION:$AWS_ACCOUNT_ID:loadbalancer/<name>
 ```
 
 ## 8. Monitoring (CloudWatch)

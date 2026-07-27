@@ -139,8 +139,14 @@ Manual/local Kubernetes deploy (no pipeline needed):
 3. **Deploy**: AWS CodeBuild project `brain-tasks-app-deploy` (`buildspec-deploy.yml`) - renders the k8s manifests with the built image, `kubectl apply`s them to EKS, waits for rollout, prints the LoadBalancer URL
 
 > CodeDeploy does not support EKS as a deployment target, so the Deploy
-> stage is a second CodeBuild project rather than CodeDeploy/`appspec.yml`
-> (kept in the repo only as a reference, not invoked). See
+> stage is a second CodeBuild project rather than CodeDeploy/`appspec.yml`.
+> An `appspec.yml` and CodeDeploy lifecycle-hook scripts (`scripts/*.sh`)
+> were kept around briefly as a reference for what each deploy step
+> conceptually does, but `appspec.yml` itself has since been removed — it
+> was never invoked by anything (CodeDeploy can't target EKS at all), so
+> keeping it risked implying a deploy path that doesn't actually exist.
+> `scripts/*.sh` remain for now as conceptual reference only; the real
+> deploy logic lives entirely in `buildspec-deploy.yml`. See
 > DEPLOYMENT_GUIDE.md for details.
 
 ### Build Process (buildspec.yml)
@@ -171,7 +177,8 @@ Brain-Tasks-App/
 │   ├── render.sh           # Renders templates from .env -> k8s/rendered/
 │   ├── deploy.sh           # Manual local deploy (render + apply + wait)
 │   └── ecr-secret.yaml     # Deprecated - secret now created imperatively
-├── scripts/                # Reference only (see appspec.yml note below)
+├── scripts/                # CodeDeploy lifecycle-hook scripts, reference only -
+│   │                        # not invoked by anything (see note below)
 │   ├── before_install.sh
 │   ├── after_install.sh
 │   ├── start_application.sh
@@ -184,7 +191,6 @@ Brain-Tasks-App/
 ├── vite.config.js          # Vite configuration
 ├── buildspec.yml           # CodeBuild: build image, push to ECR
 ├── buildspec-deploy.yml    # CodeBuild: kubectl apply to EKS
-├── appspec.yml             # Deprecated - CodeDeploy doesn't support EKS
 ├── iam-setup.sh            # Step 1: IAM roles
 ├── ecr-setup.sh            # Step 2: ECR repository
 ├── eks-setup.sh            # Step 3: EKS cluster + node group
@@ -206,11 +212,6 @@ Brain-Tasks-App/
 - Multi-stage build process
 - ECR integration
 - Artifact generation (including `buildspec-deploy.yml` for the Deploy stage)
-
-### appspec.yml (deprecated)
-- CodeDeploy does not support EKS as a deployment platform, so this file
-  is not used by the pipeline - kept only as a reference for the deploy
-  steps, which are actually implemented in `buildspec-deploy.yml`
 
 ## 📊 Monitoring and Logging
 
