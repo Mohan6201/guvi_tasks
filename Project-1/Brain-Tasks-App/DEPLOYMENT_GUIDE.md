@@ -11,7 +11,12 @@ value once in `.env` and every script/buildspec picks it up.
 - Docker Desktop running (for local image build/testing only - CodeBuild
   builds the production image, Docker Desktop is not required for AWS
   deployment itself)
-- Node.js 18+ (for local `npm run dev`)
+
+Note: this app has no source code or `package.json` - `dist/` is the
+pre-built output copied verbatim from the assigned repo
+(https://github.com/Vennilavanguvi/Brain-Tasks-App.git - see the source
+note in README.md for why). There is nothing to `npm install`/`npm run
+build`; Docker just copies `dist/` into nginx.
 
 ```bash
 cd Brain-Tasks-App
@@ -59,10 +64,9 @@ and logs your local Docker in to it (useful for step 2b, manual testing).
 **2b. Manual local build/test (optional, proves the Dockerfile works):**
 
 ```bash
-npm install && npm run build      # produces dist/
 docker build -t $APP_NAME:$IMAGE_TAG .
-docker run -d -p 8080:80 --name brain-tasks-test $APP_NAME:$IMAGE_TAG
-# visit http://localhost:8080, then:
+docker run -d -p 3000:3000 --name brain-tasks-test $APP_NAME:$IMAGE_TAG
+# visit http://localhost:3000 - title should read "Brain Task", then:
 docker stop brain-tasks-test && docker rm brain-tasks-test
 ```
 
@@ -89,8 +93,8 @@ Creates two projects, both reading their config as CodeBuild
 environment variables injected straight from `.env`:
 
 - **`$CODEBUILD_BUILD_PROJECT`** (`buildspec.yml`, privileged mode on):
-  `npm run build` -> `docker build` -> push to ECR -> writes
-  `image-uri.txt` / `imagedefinitions.json` as artifacts.
+  `docker build` (from the already-committed `dist/`) -> push to ECR ->
+  writes `image-uri.txt` / `imagedefinitions.json` as artifacts.
 - **`$CODEBUILD_DEPLOY_PROJECT`** (`buildspec-deploy.yml`): installs
   `kubectl`, points it at `$EKS_CLUSTER_NAME`, renders `k8s/*.yaml`
   templates with the real image URI, applies them, waits for rollout,
@@ -135,12 +139,11 @@ Creates `$CODEPIPELINE_NAME` with three stages:
 > CodeDeploy" stage, as the assignment brief describes it, isn't something
 > AWS actually offers. The documented, working pattern is a CodeBuild
 > project that runs `kubectl apply` as the Deploy action, which is what
-> `buildspec-deploy.yml` + this pipeline do. An `appspec.yml` was kept
-> around briefly as a reference for what each deploy step conceptually
-> does, but has since been removed, since CodeDeploy can't target EKS at
-> all and keeping it risked implying a deploy path that doesn't actually
-> exist. `scripts/*.sh` remain for now as conceptual reference only; none
-> of it is invoked by anything.
+> `buildspec-deploy.yml` + this pipeline do. An `appspec.yml` and its
+> CodeDeploy lifecycle-hook scripts were kept around briefly as reference
+> for what each deploy step conceptually does, but have since been
+> removed entirely, since CodeDeploy can't target EKS at all and keeping
+> them risked implying a deploy path that doesn't actually exist.
 
 Trigger a run:
 ```bash

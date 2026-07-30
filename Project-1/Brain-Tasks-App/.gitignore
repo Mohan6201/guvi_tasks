@@ -1,12 +1,9 @@
-# Dependencies
+# Dependencies (not used - dist/ below is the pre-built app as provided
+# by the source repo, not something built from source in this project)
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-
-# Production builds
-dist/
-build/
 
 # Environment variables
 .env

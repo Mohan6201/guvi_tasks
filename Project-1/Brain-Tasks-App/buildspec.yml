@@ -4,14 +4,17 @@ version: 0.2
 # injected as a CodeBuild environment variable from .env by
 # codebuild-setup.sh - nothing here is hardcoded.
 #
+# The source repo (github.com/Vennilavanguvi/Brain-Tasks-App) ships only a
+# pre-built dist/ folder - no package.json/src. That dist/ is copied
+# verbatim into this repo, so there is no npm install/build step here:
+# the build phase just builds and tags the Docker image.
+#
 # NOTE: CodeBuild runs each item under `commands:` as its own shell, so
 # `cd`/exported vars do NOT carry between list items. Each phase below is
 # written as a single `|` shell block for that reason.
 
 phases:
   install:
-    runtime-versions:
-      nodejs: 18
     commands:
       - |
         set -e
@@ -41,10 +44,7 @@ phases:
         cd "$WORKDIR"
         ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
         RESOLVED_TAG="$(cat /tmp/resolved_tag.txt)"
-        echo "Installing dependencies and building the React app..."
-        npm ci
-        npm run build
-        echo "Building Docker image..."
+        echo "Building Docker image (dist/ is already committed - nothing to compile)..."
         docker build -t "${ECR_REPOSITORY_NAME}:${RESOLVED_TAG}" .
         docker tag "${ECR_REPOSITORY_NAME}:${RESOLVED_TAG}" "${ECR_REGISTRY}/${ECR_REPOSITORY_NAME}:${RESOLVED_TAG}"
         docker tag "${ECR_REPOSITORY_NAME}:${RESOLVED_TAG}" "${ECR_REGISTRY}/${ECR_REPOSITORY_NAME}:latest"

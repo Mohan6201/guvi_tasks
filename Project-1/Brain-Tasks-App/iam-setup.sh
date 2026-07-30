@@ -91,6 +91,74 @@ aws iam put-role-policy \
   --policy-name "EKSDescribeAccess" \
   --policy-document "$EKS_DESCRIBE_POLICY" >/dev/null
 
+# CodeBuild only needs S3 access when invoked BY CodePipeline (which hands
+# off source/build artifacts as S3 objects) - a standalone `codebuild
+# start-build` never touches S3, so this was easy to miss until the
+# pipeline's Build stage failed with "not authorized to perform:
+# s3:GetObject" on the artifact bucket.
+echo "-> Attaching inline S3 artifact-bucket policy to $CODEBUILD_SERVICE_ROLE_NAME..."
+S3_ARTIFACT_POLICY=$(cat <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"],
+      "Resource": "arn:aws:s3:::${CODEPIPELINE_ARTIFACT_BUCKET}/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetBucketLocation", "s3:GetBucketVersioning"],
+      "Resource": "arn:aws:s3:::${CODEPIPELINE_ARTIFACT_BUCKET}"
+    }
+  ]
+}
+EOF
+)
+aws iam put-role-policy \
+  --role-name "$CODEBUILD_SERVICE_ROLE_NAME" \
+  --policy-name "S3ArtifactAccess" \
+  --policy-document "$S3_ARTIFACT_POLICY" >/dev/null
+
+# CodeBuild's GITHUB source (whether pulled standalone or via CodePipeline's
+# Source stage) is backed by a CodeConnections/CodeStar connection, not a
+# plain OAuth token. UseConnection/GetConnection alone are NOT enough -
+# GetConnectionToken is the action that actually fetches a usable access
+# token, and its absence fails DOWNLOAD_SOURCE with "Access denied" even
+# though the connection itself shows status AVAILABLE.
+if [ -n "$CODESTAR_CONNECTION_ARN" ] && [[ "$CODESTAR_CONNECTION_ARN" != *REPLACE_ME* ]]; then
+  echo "-> Attaching inline CodeConnections policy to $CODEBUILD_SERVICE_ROLE_NAME..."
+  CODECONNECTIONS_POLICY=$(cat <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "codeconnections:UseConnection", "codeconnections:GetConnection", "codeconnections:GetConnectionToken",
+        "codestar-connections:UseConnection", "codestar-connections:GetConnection", "codestar-connections:GetConnectionToken"
+      ],
+      "Resource": "${CODESTAR_CONNECTION_ARN}"
+    }
+  ]
+}
+EOF
+)
+  aws iam put-role-policy \
+    --role-name "$CODEBUILD_SERVICE_ROLE_NAME" \
+    --policy-name "CodeConnectionsAccess" \
+    --policy-document "$CODECONNECTIONS_POLICY" >/dev/null
+
+  echo "-> Pointing CodeBuild's GitHub source credential at the same connection..."
+  aws codebuild import-source-credentials \
+    --server-type GITHUB --auth-type CODECONNECTIONS \
+    --token "$CODESTAR_CONNECTION_ARN" --should-overwrite \
+    --region "$AWS_REGION" >/dev/null
+else
+  echo "-> Skipping CodeConnectionsAccess: CODESTAR_CONNECTION_ARN not set in .env yet."
+  echo "   (create the GitHub connection first, then re-run this script)"
+fi
+
 # 4. CodePipeline service role
 create_role "$CODEPIPELINE_SERVICE_ROLE_NAME" "codepipeline.amazonaws.com" \
   "arn:aws:iam::aws:policy/AWSCodeBuildAdminAccess,arn:aws:iam::aws:policy/AmazonS3FullAccess,arn:aws:iam::aws:policy/AWSCodeStarFullAccess"
