@@ -17,19 +17,23 @@ The assigned application ([github.com/Vennilavanguvi/Brain-Tasks-App](https://gi
 > `dist/` in this project is that folder copied verbatim; nothing here is
 > built from source, and no separate custom app is deployed in its place.
 
-## ⏳ Deployment status
+## ✅ Live Deployment (verified)
 
-AWS infra for this project (EKS/ECR/CodeBuild/CodePipeline) is
-currently torn down (to avoid ongoing charges between sessions) and
-needs to be re-provisioned - follow **[DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)**
-start to finish. Once redeployed, the live App URL and Load Balancer
-ARN go here.
+The pipeline has been run end-to-end against the actual assigned app.
 
-Verify locally once deployed:
+| | |
+|---|---|
+| **App URL** | http://a9cf8468fe64a4d23bcc6d1f32624fd8-311736193.us-east-1.elb.amazonaws.com |
+| **Load Balancer ARN** | `arn:aws:elasticloadbalancing:us-east-1:074925547344:loadbalancer/a9cf8468fe64a4d23bcc6d1f32624fd8` |
+| **HTTP check** | `200 OK`, `<title>Brain Task</title>` |
+| **Pods** | 3/3 `Running`, 0 restarts |
+| **Pipeline stages** | Source ✅ Build ✅ Deploy ✅ (all `Succeeded`) |
+
+Verify it yourself:
 ```bash
 kubectl get pods -n brain-tasks -l app=brain-tasks-app
 kubectl get service brain-tasks-app-service -n brain-tasks
-curl -I http://<load-balancer-hostname>/
+curl -I http://a9cf8468fe64a4d23bcc6d1f32624fd8-311736193.us-east-1.elb.amazonaws.com/
 ```
 
 ## 🚀 Application Overview
